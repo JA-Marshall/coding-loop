@@ -30,11 +30,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 if __package__:
-    from .collect import collect, is_phase_run, load_json, log_digest
+    from .collect import collect, is_phase_run, load_json, log_digest, tone_for
     from .plans import collect_plans, render_plan
 else:  # run as a plain script from any directory: python3 /path/to/scripts/monitor/serve.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from scripts.monitor.collect import collect, is_phase_run, load_json, log_digest
+    from scripts.monitor.collect import collect, is_phase_run, load_json, log_digest, tone_for
     from scripts.monitor.plans import collect_plans, render_plan
 
 PAGE = Path(__file__).with_name("index.html")
@@ -106,7 +106,7 @@ def phase_entry(batch_id, target):
             phase = "COMPLETE"
         elif rest.startswith("STOP"):
             phase, reason = "STOPPED", rest[4:].lstrip(": ").strip()
-        elif rest.startswith("START phase ") or re.match(r"^phase \d+ already done$", rest):
+        elif rest.startswith(("START phase ", "REVIEW-ONLY phase ", "CORRECT phase ")) or re.match(r"^phase \d+ already done$", rest):
             phase, reason = "RUN", None  # a rerun reopens a finished or stopped run
         m = re.match(r"^END phase (\d+) exit=\d+ staging-status=done", rest) or re.match(r"^phase (\d+) already done", rest)
         if m:
@@ -120,7 +120,7 @@ def phase_entry(batch_id, target):
             total = len(m.group(1).split()) if m else None
         except OSError:
             total = None
-    return {"id": batch_id, "path": str(target.resolve()), "phase": phase, "kind": "phases",
+    return {"id": batch_id, "path": str(target.resolve()), "phase": phase, "kind": "phases", "tone": tone_for(phase, reason, "phases"),
             "group": batch_id.split("/")[0] if "/" in batch_id else "",
             "stopped_phase": None, "reason": reason, "updated": updated, "merged": done, "total": total,
             "calls": None, "tokens": None, "deadline": None}

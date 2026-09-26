@@ -648,6 +648,17 @@ class PhaseRunTest(unittest.TestCase):
         self.assertEqual(doc["errors"], [], "a bad event line is skipped, not fatal")
         self.assertIsNone(doc["packets"][2]["corrections"], "queued phases show no correction count")
 
+    def test_stop_for_a_merge_is_waiting_not_failed(self):
+        doc = collect(self.root, now=1_790_000_000.0)
+        self.assertEqual(doc["batch"]["tone"], "broken", "an unexplained stop is a failure")
+        self.assertEqual(doc["packets"][1]["tone"], "broken")
+        log = self.root / "coordinator.log"
+        log.write_text(log.read_text() + "2026-09-26T15:20:00+01:00 STOP: phase 02 reviewed clean but its PR is open; merge it, then rerun\n")
+        doc = collect(self.root, now=1_790_000_000.0)
+        self.assertEqual(doc["batch"]["tone"], "yours")
+        self.assertEqual([p["tone"] for p in doc["packets"]], [None, "yours", None])
+        self.assertEqual(doc["batch"]["needs_you"]["kind"], "merge")
+
     def test_running_phase(self):
         (self.root / "coordinator.log").write_text("2026-09-26T14:48:36+01:00 START phase 01 (/x/phase-01-a.md)\n")
         import calendar, time as _t

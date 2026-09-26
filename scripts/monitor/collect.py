@@ -983,6 +983,23 @@ def live_transcript(prompt_path, started):
     return None
 
 
+# One meaning per colour on the page: green is done and good, blue is working, amber is
+# waiting for the owner (nothing is wrong), red is broken. A phase run that stops so the
+# owner can merge, or because the owner asked it to, is waiting, not failed.
+WAITING_REASONS = ("merge its PR", "merge it, then", "operator requested stop", "working tree not clean")
+
+
+def tone_for(phase, reason, mode):
+    """'good', 'yours' or 'broken' for a finished or stopped run; None while it works."""
+    if phase in ("COMPLETE", "LOCAL_REVIEWED"):
+        return "good"
+    if phase == "STOPPED":
+        if mode == "phases" and any(s in (reason or "") for s in WAITING_REASONS):
+            return "yours"
+        return "broken"
+    return None
+
+
 def collect_phases(directory, errors, now):
     directory = Path(directory)
     log_path = directory / "coordinator.log"
@@ -1005,10 +1022,22 @@ def collect_phases(directory, errors, now):
         m = re.search(r'^PHASES="\$\{PHASES:-([\d\s]+)\}"', text, re.MULTILINE)
         if m:
             planned = m.group(1).split()
-        m = re.search(r"^REPO=(\S+)", text, re.MULTILINE)
-        repo = m.group(1) if m else None
-        m = re.search(r"^PROMPTS=(\S+)", text, re.MULTILINE)
-        prompts = m.group(1).replace("$REPO", repo or "") if m else None
+        # phases.env (sourced by the script) wins; otherwise the script's own REPO="${REPO:-default}".
+        try:
+            env = (directory / "phases.env").read_text(errors="replace")
+        except OSError:
+            env = ""
+        def setting(name):
+            for source in (env, text):
+                m = re.search(r"^" + name + r"=(\S+)", source, re.MULTILINE)
+                if m:
+                    value = m.group(1).strip('"').strip("'")
+                    d = re.fullmatch(r"\$\{" + name + r":-(.*)\}", value)
+                    return d.group(1) if d else value
+            return None
+        repo = setting("REPO")
+        prompts = setting("PROMPTS")
+        prompts = prompts.replace("$REPO", repo or "") if prompts else None
     phases, order = {}, []
     stop, all_done, last_stamp = None, None, None
 
@@ -1212,12 +1241,29 @@ def collect_phases(directory, errors, now):
             "tokens": {"used": tokens_total if rows else None, "limit": None, "incomplete": False, "reason": None},
             "packet": None, "cost_usd": cost_total,
         },
+        "tone": tone_for(phase_word, stop["reason"] if stop else None, "phases"),
         "stop_requested": (directory / "STOP").exists(), "reason": stop["reason"] if stop else None,
         "stopped_phase": ("phase " + running[0]["n"]) if (stop and running) else None,
         "evidence_dir": str(directory), "pr": None,
         "stopped_at": stop["at"] if stop else None,
         "events": events_path.is_file(),
     }
+    reviewing_ids = {r["n"] for r in reviewing}
+    last_stopped = next((r["n"] for r in reversed(rows) if r["status"] == "stopped"), None)
+
+    def row_tone(r):
+        """A phase that ended without merging is usually a healthy PR waiting for review or merge."""
+        if r["status"] != "stopped":
+            return None
+        if not stop and (r["n"] in reviewing_ids or any(c["finished"] is None for c in r["corrections"])):
+            return "working"
+        if batch["tone"] == "broken" and r["n"] == last_stopped:
+            return "broken"
+        res = r.get("result") or {}
+        if r["exit_code"] not in (0, None) or res.get("is_error"):
+            return "broken"
+        return "yours"
+
     packets = []
     for r in rows:
         res = r.get("result") or {}
@@ -1227,6 +1273,7 @@ def collect_phases(directory, errors, now):
             pr = {"number": int(m.group(1)), "url": m.group(0)}
         packets.append({"id": "phase-" + r["n"], "title": r["name"], "status": r["status"], "advisory_review": bool(r.get("review")),
                         "worker": {"model": res.get("model") or r.get("model"), "reasoning": None}, "owned_files": [], "batch_phase": None,
+                        "tone": row_tone(r),
                         "pr": pr, "runner": None, "phase": r["staging_status"], "calls": r["attempts"] or None,
                         "corrections": len(r["corrections"]) if (r["corrections"] or r["status"] != "queued") else None,
                         "tokens": (res["tokens"]["input"] + res["tokens"]["output"]) if res.get("tokens") else None,
@@ -1248,7 +1295,7 @@ def needs_you(batch, packets):
         last = stopped[-1] if stopped else None
         pr = (last or {}).get("pr")
         rv = ((last or {}).get("phase_run") or {}).get("review") or {}
-        if phase == "STOPPED" and "merge its PR" in reason:
+        if phase == "STOPPED" and ("merge its PR" in reason or "merge it, then" in reason):
             text = "Phase " + (last["id"].replace("phase-", "") if last else "?") + " is reviewed clean and its PR waits for your merge. Merge it, then press Run."
             if rv.get("advisory") == "BLOCKING":
                 text += " The GPT advisory review flagged a blocking finding; read it before merging."
