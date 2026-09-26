@@ -338,7 +338,9 @@ footer.note a{color:var(--running)}
     });
   }
   function copyText(text, button) {
-    var done = function () { button.textContent = 'copied'; setTimeout(function () { button.textContent = 'copy path'; }, 1200); };
+    var label = button.getAttribute('data-label') || button.textContent;
+    button.setAttribute('data-label', label);
+    var done = function () { button.textContent = 'copied'; setTimeout(function () { button.textContent = label; }, 1200); };
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
     else { window.prompt('Copy this path', text); }
   }
@@ -840,6 +842,38 @@ footer.note a{color:var(--running)}
       ' <span class="muted">' + (c.live ? 'now ' + num(c.last) + ' · live · ' : '') + plural(c.turns, 'turn') + '</span>';
   }
 
+  // A second opinion on a blocking finding, as a prompt to paste into any AI. It reads the PR
+  // without touching the runner's checkout, which a running session may be using.
+  function blockerPrompt(doc, p, rv) {
+    var r = p.phase_run, repo = doc.batch.repository || '(the repository)';
+    var slug = p.pr && p.pr.url ? p.pr.url.replace(/^https:\/\/github\.com\//, '').replace(/\/pull\/\d+$/, '') : '';
+    var n = (p.pr && p.pr.number) || rv.pr;
+    var branch = null;
+    (r.corrections || []).forEach(function (c) { if (c.branch) branch = c.branch; });
+    var findings = [];
+    if (rv.verdict === 'BLOCKING' && rv.claude) findings.push('Claude review (' + (rv.claude.path || '') + '):\n' + rv.claude.text + (rv.claude.truncated ? '\n[truncated; read the full file]' : ''));
+    if (rv.advisory === 'BLOCKING' && rv.gpt) findings.push('GPT review (' + (rv.gpt.path || '') + '):\n' + rv.gpt.text + (rv.gpt.truncated ? '\n[truncated; read the full file]' : ''));
+    return [
+      'An automated code reviewer marked a finding as BLOCKING on pull request #' + n + (p.pr && p.pr.url ? ' (' + p.pr.url + ')' : '') + ', ' + p.id + ' "' + p.title + '". Before another automatic fix round is spent on it, tell me whether it is a real blocker.',
+      '',
+      'Where things are:',
+      '- Repository checkout: ' + repo + '. A coding loop may be working in it right now, so do NOT switch branches, edit, commit, push or merge there.',
+      '- Read the PR with `gh pr diff ' + n + (slug ? ' -R ' + slug : '') + '` and files at its head with `git -C ' + repo + ' fetch -q origin && git -C ' + repo + ' show origin/' + (branch || '<branch from `gh pr view ' + n + ' --json headRefName`>') + ':<path>`.',
+      r.prompt ? '- The task this PR implements (its contract and acceptance checks): ' + r.prompt : '',
+      '- Context: a single-owner project, nothing deployed yet, payments in test mode. Blocking should mean it can corrupt stock, money or orders, break the contract, or fail the acceptance checks.',
+      '',
+      'The finding(s), verbatim:',
+      '-----',
+      findings.join('\n\n-----\n') || '(no review text found; read the review files)',
+      '-----',
+      '',
+      'Answer briefly:',
+      '1. Can the failure scenario actually happen with this code? Walk through it step by step, or say exactly why it cannot.',
+      '2. Verdict: REAL BLOCKER, REAL BUT NOT BLOCKING, or NOT VALID.',
+      '3. If it is real, the smallest fix, and whether the other reviewer or the tests already cover it.'
+    ].filter(function (line) { return line !== ''; }).join('\n').replace(/\n(Where things are:|The finding|Answer briefly:)/g, '\n\n$1');
+  }
+
   function renderPhaseDetail(doc, p) {
     var r = p.phase_run, res = r.result || {}, t = res.tokens;
     var head = '<header><h2>' + h(p.id) + ' · ' + h(p.title) + '</h2><span class="muted">' + (res.model ? 'model ' + h(res.model) : 'model unknown') + (res.session ? ' · session <span class="mono">' + h(res.session.slice(0, 8)) + '</span>' : '') + '</span></header>';
@@ -884,6 +918,9 @@ footer.note a{color:var(--running)}
       var verdictPills = [];
       if (rv.verdict) verdictPills.push('<span class="pill ' + (rv.verdict === 'CLEAN' ? 'verified' : rv.verdict === 'BLOCKING' ? 'failed' : 'attention') + '">Claude: ' + h(rv.verdict) + '</span>');
       if (rv.advisory) verdictPills.push('<span class="pill ' + (rv.advisory === 'CLEAN' ? 'verified' : rv.advisory === 'BLOCKING' ? 'failed' : '') + '">GPT: ' + h(rv.advisory) + (rv.gating != null ? (rv.advisory === 'BLOCKING' && rv.gating !== 'BLOCKING' ? ' · advisory only' : '') : '') + '</span>');
+      if (rv.verdict === 'BLOCKING' || rv.advisory === 'BLOCKING') {
+        verdictPills.push('<button type="button" data-copy="' + h(blockerPrompt(doc, p, rv)) + '" title="Copies a prompt for any AI: the finding, where the code is, and what to answer">copy \u201cis this a real blocker?\u201d prompt</button>');
+      }
       if (verdictPills.length) parts.push('<div class="toolbar">' + verdictPills.join(' ') + '</div>');
       if (rv.posted) parts.push('<span class="pill" style="justify-self:start">posted to the PR</span>');
       else if (rv.claude || rv.gpt) parts.push('<span class="pill attention" style="justify-self:start">not posted yet</span>');
