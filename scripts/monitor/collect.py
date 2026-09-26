@@ -1134,7 +1134,9 @@ def collect_phases(directory, errors, now):
             phases[number] = {"n": number, "name": "phase " + number, "prompt": None, "started": None, "finished": None,
                               "exit_code": None, "staging_status": None, "already_done": False, "attempts": 0,
                               "summary": None, "result": None, "stderr": None, "stderr_bytes": 0, "status": "queued",
-                              "model": None, "review": None, "corrections": []}
+                              "model": None, "review": None, "corrections": [],
+                              # Every stretch of work for the timeline: build, review and fix, in order.
+                              "segments": []}
             order.append(number)
         return phases[number]
 
@@ -1152,6 +1154,7 @@ def collect_phases(directory, errors, now):
             ph = phase(m2.group(1))
             ph.update(started=stamp, finished=None, exit_code=None, prompt=m2.group(2), name=phase_name(m2.group(2), m2.group(1)),
                       attempts=ph["attempts"] + 1, status="running", model=m2.group(3) or ph["model"], review=None)
+            ph["segments"].append({"kind": "build", "start": stamp, "end": None})
             continue
         m2 = REVIEW_LINE.match(rest)
         if m2:
@@ -1168,6 +1171,12 @@ def collect_phases(directory, errors, now):
                 review["pr"] = int(m3.group(1))
             if note.startswith("PR #"):
                 review["started"], review["posted"] = stamp, False
+                ph["segments"].append({"kind": "review", "start": stamp, "end": None})
+            elif "verdict" in note or "no open PR" in note:
+                for seg in reversed(ph["segments"]):
+                    if seg["kind"] == "review" and seg["end"] is None:
+                        seg["end"] = stamp
+                        break
             if "posted" in note:
                 review["posted"] = True
             if note:
@@ -1179,6 +1188,10 @@ def collect_phases(directory, errors, now):
         if m2:
             ph = phase(m2.group(1))
             ph.update(finished=stamp, exit_code=int(m2.group(2)), staging_status=m2.group(3), summary=m2.group(4).strip())
+            for seg in reversed(ph["segments"]):
+                if seg["kind"] == "build" and seg["end"] is None:
+                    seg["end"] = stamp
+                    break
             ph["status"] = "merged" if m2.group(3) == "done" and ph["exit_code"] == 0 else "stopped"
             continue
         m2 = DONE_LINE.match(rest)
@@ -1193,6 +1206,7 @@ def collect_phases(directory, errors, now):
             ph = phase(m2.group(1))
             ph["corrections"].append({"round": int(m2.group(2)), "branch": m2.group(3), "pr": int(m2.group(4)),
                                       "model": m2.group(5), "started": stamp, "finished": None, "exit_code": None})
+            ph["segments"].append({"kind": "fix", "start": stamp, "end": None})
             continue
         m2 = CORRECTED_LINE.match(rest)
         if m2:
@@ -1200,6 +1214,10 @@ def collect_phases(directory, errors, now):
             for c in ph["corrections"]:
                 if c["round"] == int(m2.group(2)) and c["finished"] is None:
                     c.update(finished=stamp, exit_code=int(m2.group(3)))
+            for seg in reversed(ph["segments"]):
+                if seg["kind"] == "fix" and seg["end"] is None:
+                    seg["end"] = stamp
+                    break
             continue
         if rest.startswith("STOP"):
             stop = {"at": stamp, "reason": rest[4:].lstrip(": ").strip() or "stopped"}
@@ -1302,6 +1320,10 @@ def collect_phases(directory, errors, now):
         reviewing = []
     # A phase left "running" after a later START or STOP never ended; mark it.
     if stop:
+        for r in rows:  # nothing is still going once the loop has stopped or died
+            for seg in r["segments"]:
+                if seg["end"] is None:
+                    seg["end"] = stop["at"]
         for r in running:
             r["status"] = "stopped"
             r["finished"] = r["finished"] or stop["at"]
