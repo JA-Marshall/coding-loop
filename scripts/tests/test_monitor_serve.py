@@ -485,3 +485,40 @@ class RoutesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OwnerDecisionsTest(unittest.TestCase):
+    """The owner's decisions for a phase, saved from the page into phase-NN-owner.md."""
+
+    def setUp(self):
+        from scripts.tests.test_monitor_collect import build_phase_run
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "run"
+        build_phase_run(self.root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_save_replace_and_clear(self):
+        from http import HTTPStatus
+        from scripts.monitor.collect import collect
+        status, body = serve.write_owner_decisions(self.root, "02", "  Use 31 minutes.\r\nDo not flag it.  ")
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual((self.root / "phase-02-owner.md").read_text(), "Use 31 minutes.\nDo not flag it.\n")
+        self.assertEqual(collect(self.root)["packets"][1]["phase_run"]["owner"]["text"], "Use 31 minutes.\nDo not flag it.\n")
+        self.assertIsNone(collect(self.root)["packets"][2]["phase_run"]["owner"], "a queued phase has no decisions yet")
+        serve.write_owner_decisions(self.root, "02", "Replaced.")
+        self.assertEqual((self.root / "phase-02-owner.md").read_text(), "Replaced.\n")
+        self.assertFalse((self.root / "phase-02-owner.md.tmp").exists())
+        status, body = serve.write_owner_decisions(self.root, "02", "   ")
+        self.assertTrue(body["removed"])
+        self.assertFalse((self.root / "phase-02-owner.md").exists())
+
+    def test_refusals(self):
+        from http import HTTPStatus
+        for phase in ("2", "../x", None, "002"):
+            self.assertEqual(serve.write_owner_decisions(self.root, phase, "x")[0], HTTPStatus.BAD_REQUEST, phase)
+        self.assertEqual(serve.write_owner_decisions(self.root, "02", "x" * 20001)[0], HTTPStatus.BAD_REQUEST)
+        self.assertEqual(serve.write_owner_decisions(self.root, "02", 5)[0], HTTPStatus.BAD_REQUEST)
+        self.assertEqual(serve.write_owner_decisions(Path(self.tmp.name), "02", "x")[0], HTTPStatus.BAD_REQUEST, "not a phase run")
+        self.assertEqual(list(self.root.glob("*owner*")), [])

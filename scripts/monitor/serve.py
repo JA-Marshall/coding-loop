@@ -238,6 +238,29 @@ def control_state(target):
             "script": str(target / "run_phases.sh") if phases and (target / "run_phases.sh").is_file() else None}
 
 
+OWNER_LIMIT = 20000
+
+
+def write_owner_decisions(target, phase, text):
+    """Save (or, when empty, remove) phase-NN-owner.md, the owner's final decisions for a phase."""
+    target = Path(target)
+    if not is_phase_run(target):
+        return HTTPStatus.BAD_REQUEST, {"error": "not a phase run"}
+    if not isinstance(phase, str) or not re.fullmatch(r"\d{2}", phase):
+        return HTTPStatus.BAD_REQUEST, {"error": "phase must be two digits"}
+    if not isinstance(text, str) or len(text) > OWNER_LIMIT:
+        return HTTPStatus.BAD_REQUEST, {"error": "text must be a string of at most %d characters" % OWNER_LIMIT}
+    path = target / f"phase-{phase}-owner.md"
+    text = text.replace("\r\n", "\n").strip()
+    if not text:
+        path.unlink(missing_ok=True)
+        return HTTPStatus.OK, {"phase": phase, "removed": True}
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text + "\n")
+    os.replace(tmp, path)  # a runner reading the file sees the old text or the new, never half
+    return HTTPStatus.OK, {"phase": phase, "bytes": len(text) + 1, "path": str(path)}
+
+
 def launch_phases(target, command, phase=None):
     """Run the phase runner's subcommand detached, exactly as the shell would. Returns (status, payload)."""
     target = Path(target)
@@ -441,6 +464,14 @@ class MonitorHandler(BaseHTTPRequestHandler):
             return self.send_json(HTTPStatus.OK, write_stop(target))
         if parts.path == "/api/stop/clear":
             return self.send_json(HTTPStatus.OK, clear_stop(target))
+        if parts.path == "/api/phases/owner":
+            status, payload = write_owner_decisions(target, data.get("phase"), data.get("text"))
+            if status == HTTPStatus.OK and data.get("then") == "correct":
+                # The decisions are saved either way; say separately whether the fix started.
+                launch_status, launched = launch_phases(target, "correct", data.get("phase"))
+                payload["launched"] = launched if launch_status == HTTPStatus.OK else None
+                payload["launch_error"] = None if launch_status == HTTPStatus.OK else launched.get("error")
+            return self.send_json(status, payload)
         if parts.path == "/api/phases/launch":
             status, payload = launch_phases(target, str(data.get("command") or ""), data.get("phase"))
             return self.send_json(status, payload)

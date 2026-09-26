@@ -89,6 +89,10 @@ p{margin:0}
 .strip .right{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted)}
 .strip .key{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:11px;color:var(--muted);border-top:1px solid var(--hair);padding-top:8px}
 .strip .key>span{display:inline-flex;align-items:center;gap:6px}
+.owner-card{display:grid;gap:8px;margin:12px 0;padding:10px 12px;border:1px solid color-mix(in oklch,var(--attention) 45%,transparent);border-radius:6px;background:var(--panel)}
+.owner-card textarea{width:100%;box-sizing:border-box;font:13px/1.5 var(--sans);color:var(--fg);background:var(--sunken);border:1px solid var(--hair);border-radius:4px;padding:8px}
+.owner-card .owner-text{margin:0;white-space:pre-wrap;font:13px/1.5 var(--sans)}
+.owner-card .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .strip .proof{flex-basis:100%;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--hair)}
 .strip .proof.ok{color:var(--running);background:var(--running-soft);border-color:color-mix(in oklch,var(--running) 40%,transparent)}
 .strip .proof.bad{color:var(--failed);background:var(--failed-soft);border-color:color-mix(in oklch,var(--failed) 45%,transparent)}
@@ -245,7 +249,7 @@ footer.note a{color:var(--running)}
   'use strict';
   var POLL_MS = 3000;
   var app = document.getElementById('app');
-  var state = {raw: '', doc: null, selected: null, openLogs: {}, logs: {}, offline: null, claimOpen: false};
+  var state = {raw: '', doc: null, selected: null, openLogs: {}, logs: {}, offline: null, claimOpen: false, editing: null};
   var PACKET_STAGES = ['IMPLEMENT', 'APPLYING', 'CHECKS', 'REVIEW', 'LOCAL_REVIEWED'];
   var BATCH_STAGES = ['COMMIT', 'PUSH', 'PR', 'CI', 'MERGE'];
   var START_COMMAND = 'python -m scripts.coordination.service start <manifest.json> --directory <evidence-dir>';
@@ -318,7 +322,7 @@ footer.note a{color:var(--running)}
       if (text === state.raw) { paintOffline(); return; }
       state.raw = text;
       state.doc = JSON.parse(text);
-      render();
+      if (!state.editing) render();  // redraws wait while the owner is typing decisions
     }).catch(function (error) {
       state.offline = error && error.message ? error.message : String(error);
       if (!state.doc) render(); else paintOffline();
@@ -349,7 +353,7 @@ footer.note a{color:var(--running)}
   function pickSelected(doc) {
     var ids = doc.packets.map(function (p) { return p.id; });
     var wanted = packetFromHash();
-    if (wanted && ids.indexOf(wanted) >= 0 && doc.packets[ids.indexOf(wanted)].status !== 'queued') return wanted;
+    if (wanted && ids.indexOf(wanted) >= 0 && (doc.packets[ids.indexOf(wanted)].status !== 'queued' || doc.packets[ids.indexOf(wanted)].phase_run)) return wanted;
     if (state.selected && ids.indexOf(state.selected) >= 0) {
       var current = doc.packets[ids.indexOf(state.selected)];
       if (current.status !== 'queued') return state.selected;
@@ -754,7 +758,7 @@ footer.note a{color:var(--running)}
         return '<td class="num' + (q ? ' q' : '') + '" data-label="' + label + '">' + (q ? '–' : value == null ? unknown() : fmt(value)) + '</td>';
       };
       var elapsed = p.elapsed_s;
-      return '<tr class="' + reg + (p.id === state.selected ? ' selected' : '') + '"' + (q ? '' : ' data-id="' + h(p.id) + '" tabindex="0" role="button" aria-label="Show ' + h(p.id) + '"') + '>' +
+      return '<tr class="' + reg + (p.id === state.selected ? ' selected' : '') + '"' + (q && !p.phase_run ? '' : ' data-id="' + h(p.id) + '" tabindex="0" role="button" aria-label="Show ' + h(p.id) + '"') + '>' +
         '<td><span class="dot ' + reg + '" aria-hidden="true"></span></td>' +
         '<td class="title"><div class="t">' + h(p.title) + '</div><div class="s mono">' + h(p.id) + '</div></td>' +
         '<td class="state">' + stateCell(p) + '</td>' +
@@ -890,6 +894,29 @@ footer.note a{color:var(--running)}
     ].filter(function (line) { return line !== ''; }).join('\n').replace(/\n(Where things are:|The finding|Answer briefly:)/g, '\n\n$1');
   }
 
+  // The owner's final decisions for a phase (phase-NN-owner.md). The runner puts them into the
+  // build, every review and every fix, so a design question the reviewers keep circling is settled once.
+  function ownerCard(doc, p) {
+    var n = p.id.replace(/^phase-/, ''), o = p.phase_run.owner, c = doc.control || {};
+    var editing = state.editing && state.editing.phase === n;
+    var canFix = !c.locked && !c.stop && p.status !== 'queued' && p.phase_run.review;
+    var body;
+    if (editing) {
+      body = '<textarea data-owner-text rows="10" spellcheck="true" placeholder="Plain sentences, for example: A replayed 400 always releases the hold. 31 minutes is my decision; do not flag it.">' + h(state.editing.text) + '</textarea>' +
+        '<div class="toolbar"><button type="button" data-owner="save">Save</button>' +
+        (canFix ? '<button type="button" data-owner="save-correct">Save and fix</button>' : '') +
+        '<button type="button" data-owner="cancel">Cancel</button><span class="muted" data-owner-msg>The page stops refreshing while you type.</span></div>';
+    } else if (o) {
+      body = '<pre class="owner-text">' + h(o.text) + '</pre><div class="toolbar"><button type="button" data-owner="edit">Edit</button>' +
+        (canFix ? '<button type="button" data-owner="correct">Fix with these decisions</button>' : '') +
+        '<span class="muted">saved ' + (o.at ? h(clock(o.at)) : '') + '</span></div>';
+    } else {
+      body = '<p class="muted">None yet. Write what you want settled, in plain sentences. The build, every review and every fix treat it as final.</p>' +
+        '<div class="toolbar"><button type="button" data-owner="edit">Add decisions</button></div>';
+    }
+    return '<div class="owner-card"><h3>Your decisions for this phase</h3>' + body + '</div>';
+  }
+
   function renderPhaseDetail(doc, p) {
     var r = p.phase_run, res = r.result || {}, t = res.tokens;
     var head = '<header><h2>' + h(p.id) + ' · ' + h(p.title) + '</h2><span class="muted">' + (res.model ? 'model ' + h(res.model) : 'model unknown') + (res.session ? ' · session <span class="mono">' + h(res.session.slice(0, 8)) + '</span>' : '') + '</span></header>';
@@ -955,7 +982,7 @@ footer.note a{color:var(--running)}
       parts.push('<span class="muted" style="font-size:11.5px">Merge is the owner\'s decision. A blocking finding is fixed on the branch before merging.</span></div>');
       review = parts.join('');
     }
-    return '<section class="panel" aria-label="Packet detail">' + head + '<div class="detail"><div class="toolbar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' + pills.join(' ') + '</div>' + facts +
+    return '<section class="panel" aria-label="Packet detail">' + head + '<div class="detail"><div class="toolbar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' + pills.join(' ') + '</div>' + facts + ownerCard(doc, p) +
       '<div class="two">' + supervisor + claim + '</div>' + corrections + review + '</div></section>';
   }
 
@@ -963,6 +990,9 @@ footer.note a{color:var(--running)}
     var p = null;
     doc.packets.forEach(function (x) { if (x.id === state.selected) p = x; });
     if (!p) return '';
+    if (p.phase_run && p.status === 'queued') {
+      return '<section class="panel" aria-label="Packet detail"><header><h2>' + h(p.id) + ' · ' + h(p.title) + '</h2><span class="muted">not started yet</span></header><div class="detail">' + ownerCard(doc, p) + '</div></section>';
+    }
     if (p.phase_run) return renderPhaseDetail(doc, p);
     var r = p.runner, w = p.worker || {};
     var head = '<header><h2>' + h(p.id) + '</h2><span class="muted">' + (p.evidence_from ? 'evidence from the earlier run <span class="mono">' + h(p.evidence_from.split('/').pop()) + '</span> · ' : '') +
@@ -1081,6 +1111,7 @@ footer.note a{color:var(--running)}
     var target = event.target.closest('button, tr[data-id], tr[data-run]');
     if (!target) return;
     if (target.hasAttribute('data-copy')) { copyText(target.getAttribute('data-copy'), target); return; }
+    if (target.hasAttribute('data-owner')) { ownerAction(target); return; }
     if (target.hasAttribute('data-log')) {
       var path = target.getAttribute('data-log');
       state.openLogs[path] = !state.openLogs[path];
@@ -1113,6 +1144,40 @@ footer.note a{color:var(--running)}
     if (target.hasAttribute('data-id')) { location.hash = 'packet=' + encodeURIComponent(target.getAttribute('data-id')); return; }
     if (target.hasAttribute('data-run')) { location.href = batchHref(target.getAttribute('data-run')); }
   });
+  function ownerAction(button) {
+    var act = button.getAttribute('data-owner'), n = (state.selected || '').replace(/^phase-/, '');
+    var packet = state.doc && state.doc.packets.filter(function (p) { return p.id === state.selected; })[0];
+    if (act === 'edit') {
+      state.editing = {phase: n, text: packet && packet.phase_run.owner ? packet.phase_run.owner.text : ''};
+      render();
+      var box = document.querySelector('textarea[data-owner-text]');
+      if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+      return;
+    }
+    if (act === 'cancel') { state.editing = null; render(); return; }
+    if (act === 'correct') {
+      if (!window.confirm('Start a fix for phase ' + n + ' with your decisions? A review follows automatically.')) return;
+      button.disabled = true;
+      post('/api/phases/launch', {command: 'correct', phase: n}).then(function () { state.raw = ''; fetchState(); })
+        .catch(function (e) { button.disabled = false; window.alert('Not started: ' + e.message); });
+      return;
+    }
+    var text = (document.querySelector('textarea[data-owner-text]') || {}).value || '';
+    var fix = act === 'save-correct';
+    if (fix && !window.confirm('Save your decisions and start a fix for phase ' + n + '? A review follows automatically.')) return;
+    var msg = document.querySelector('[data-owner-msg]');
+    button.disabled = true;
+    post('/api/phases/owner', {phase: n, text: text, then: fix ? 'correct' : undefined}).then(function (j) {
+      state.editing = null;
+      state.raw = '';
+      fetchState();
+      if (j.launch_error) window.alert('Saved, but the fix did not start: ' + j.launch_error);
+    }).catch(function (e) { button.disabled = false; if (msg) msg.textContent = 'Not saved: ' + e.message; });
+  }
+  app.addEventListener('input', function (event) {
+    if (event.target.matches('textarea[data-owner-text]') && state.editing) state.editing.text = event.target.value;
+  });
+
   window.addEventListener('hashchange', function () {
     var wanted = packetFromHash();
     if (wanted) { state.selected = wanted; state.claimOpen = false; }
