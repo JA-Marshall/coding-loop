@@ -89,6 +89,8 @@ p{margin:0}
 .strip .right{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted)}
 .strip .key{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:11px;color:var(--muted);border-top:1px solid var(--hair);padding-top:8px}
 .strip .key>span{display:inline-flex;align-items:center;gap:6px}
+.receipt{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;font-size:12.5px;margin:2px 0}
+.receipt button{font-size:12px}
 .owner-card{display:grid;gap:8px;margin:12px 0;padding:10px 12px;border:1px solid color-mix(in oklch,var(--attention) 45%,transparent);border-radius:6px;background:var(--panel)}
 .owner-card textarea{width:100%;box-sizing:border-box;font:13px/1.5 var(--sans);color:var(--fg);background:var(--sunken);border:1px solid var(--hair);border-radius:4px;padding:8px}
 .owner-card .owner-text{margin:0;white-space:pre-wrap;font:13px/1.5 var(--sans)}
@@ -896,6 +898,14 @@ footer.note a{color:var(--running)}
 
   // The owner's final decisions for a phase (phase-NN-owner.md). The runner puts them into the
   // build, every review and every fix, so a design question the reviewers keep circling is settled once.
+  // What a session was given, from the runner's receipt: sections, sizes, finding IDs and verdicts.
+  function inputLine(item) {
+    if (!item) return '';
+    var open = state.openLogs[item.file], entry = state.logs[item.file];
+    var body = open ? '<div class="log">' + (!entry || entry.loading ? 'loading…' : entry.error ? h(entry.error) : h(entry.tail || '(empty)')) + '</div>' : '';
+    return '<div class="receipt"><span class="muted">Given:</span> <span>' + h(item.receipt) + '</span> <button type="button" data-log="' + h(item.file) + '">' + (open ? 'hide' : 'show') + ' input</button></div>' + body;
+  }
+
   function ownerCard(doc, p) {
     var n = p.id.replace(/^phase-/, ''), o = p.phase_run.owner, c = doc.control || {};
     var editing = state.editing && state.editing.phase === n;
@@ -933,6 +943,7 @@ footer.note a{color:var(--running)}
         ' <span class="muted">(' + (r.elapsed_s != null ? h(dur(r.elapsed_s, true)) : '?') + (res.duration_api_s != null ? ', ' + h(dur(res.duration_api_s, true)) + ' of model time' : '') + (res.turns != null ? ', ' + plural(res.turns, 'turn') : '') + (r.attempts > 1 ? ', ' + plural(r.attempts, 'attempt') : '') + ')</span></dd>' +
       '<dt>Tokens</dt><dd>' + (t ? num(t.input + t.output) + ' <span class="muted">in ' + num(t.input) + ' (' + num(t.cached) + ' cached) · out ' + num(t.output) + (t.thinking != null ? ' · thinking ' + num(t.thinking) : '') + '</span>' : unknown()) + '</dd>' +
       '<dt>Context</dt><dd>' + contextText(r.context) + '</dd>' +
+      (r.input ? '<dt>Given</dt><dd>' + inputLine(r.input) + '</dd>' : '') +
       (r.prompt ? '<dt>Prompt</dt><dd class="path"><code>' + h(r.prompt) + '</code><button type="button" data-copy="' + h(r.prompt) + '">copy path</button></dd>' : '') +
       (r.output ? '<dt>Output</dt><dd class="path"><code>' + h(r.output) + '</code><button type="button" data-copy="' + h(r.output) + '">copy path</button></dd>' : '') +
       (r.stderr ? '<dt>Stderr</dt><dd>' + (r.stderr_bytes ? '<button type="button" data-log="' + h(r.stderr) + '">' + (state.openLogs[r.stderr] ? 'hide' : 'show') + ' ' + num(r.stderr_bytes) + ' bytes</button>' : '<span class="muted">empty</span>') + '</dd>' : '') +
@@ -952,12 +963,12 @@ footer.note a{color:var(--running)}
       corrections = '<div style="display:grid;gap:6px"><h3>Fixes after review</h3>' + r.corrections.map(function (c, ci) {
         var pill = c.exit_code === 0 ? '<span class="pill verified">exit 0</span>' : typeof c.exit_code === 'number' ? '<span class="pill failed">exit ' + c.exit_code + '</span>' : '<span class="pill running">running</span>';
         var took = c.started != null && c.finished != null ? clock(c.started) + '–' + clock(c.finished) : c.started != null ? 'since ' + clock(c.started) : '?';
-        return '<div class="check">' + pill + '<span class="mono">fix ' + (ci + 1) + ' · ' + h(took) + ' · ' + h(c.model) + '</span><span class="muted">on ' + h(c.branch) + ' · PR #' + c.pr + '</span></div>';
+        return inputLine(c.input) + '<div class="check">' + pill + '<span class="mono">fix ' + (ci + 1) + ' · ' + h(took) + ' · ' + h(c.model) + '</span><span class="muted">on ' + h(c.branch) + ' · PR #' + c.pr + '</span></div>';
       }).join('') + '</div>';
     }
     if (r.arbiter) {
       var a = r.arbiter, apill = !a.finished ? '<span class="pill running">working</span>' : a.outcome === 'fixed' ? '<span class="pill verified">fixed it</span>' : '<span class="pill attention">handed to you</span>';
-      corrections += '<div style="display:grid;gap:6px;margin-top:8px"><h3>Arbiter</h3><div class="check">' + apill + '<span class="mono">' + h(a.model || 'arbiter') + ' · ' + h(clock(a.started)) + (a.finished ? '–' + h(clock(a.finished)) : ' → now') + '</span>' + (a.summary ? '<span>' + h(a.summary) + '</span>' : '') + '</div></div>';
+      corrections += '<div style="display:grid;gap:6px;margin-top:8px"><h3>Arbiter</h3><div class="check">' + apill + '<span class="mono">' + h(a.model || 'arbiter') + ' · ' + h(clock(a.started)) + (a.finished ? '–' + h(clock(a.finished)) : ' → now') + '</span>' + (a.summary ? '<span>' + h(a.summary) + '</span>' : '') + '</div>' + inputLine(a.input) + '</div>';
     }
     var review = '';
     if (r.review) {
@@ -969,6 +980,7 @@ footer.note a{color:var(--running)}
         verdictPills.push('<button type="button" data-copy="' + h(blockerPrompt(doc, p, rv)) + '" title="Copies a prompt for any AI: the finding, where the code is, and what to answer">copy \u201cis this a real blocker?\u201d prompt</button>');
       }
       if (verdictPills.length) parts.push('<div class="toolbar">' + verdictPills.join(' ') + '</div>');
+      if (rv.input) parts.push(inputLine(rv.input));
       if (rv.posted) parts.push('<span class="pill" style="justify-self:start">posted to the PR</span>');
       else if (rv.claude || rv.gpt) parts.push('<span class="pill attention" style="justify-self:start">not posted yet</span>');
       else parts.push('<span class="pill running" style="justify-self:start">review running' + (rv.started != null ? ' since ' + h(clock(rv.started)) : '') + '</span>');

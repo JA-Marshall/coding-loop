@@ -522,3 +522,17 @@ class OwnerDecisionsTest(unittest.TestCase):
         self.assertEqual(serve.write_owner_decisions(self.root, "02", 5)[0], HTTPStatus.BAD_REQUEST)
         self.assertEqual(serve.write_owner_decisions(Path(self.tmp.name), "02", "x")[0], HTTPStatus.BAD_REQUEST, "not a phase run")
         self.assertEqual(list(self.root.glob("*owner*")), [])
+
+
+class SessionInputTest(unittest.TestCase):
+    def test_inputs_are_served_from_their_start_and_other_md_files_are_not(self):
+        from http import HTTPStatus
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "phase-01-correct-r1-attempt-1-input.md").write_text("FINDINGS FIRST\n" + "x" * 50000)
+            (root / "phase-01-owner.md").write_text("private")
+            status, body = serve.log_tail([root], str(root / "phase-01-correct-r1-attempt-1-input.md"))
+            self.assertEqual(status, HTTPStatus.OK)
+            self.assertTrue(body["tail"].startswith("FINDINGS FIRST"))
+            self.assertTrue(body["truncated"])
+            self.assertEqual(serve.log_tail([root], str(root / "phase-01-owner.md"))[0], HTTPStatus.FORBIDDEN)

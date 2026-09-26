@@ -589,6 +589,15 @@ class PhaseRunTest(unittest.TestCase):
         self.assertEqual(doc["batch"]["tone"], "yours")
         self.assertIn("did not merge itself: CI failed on abc1234: tests.", doc["batch"]["needs_you"]["text"])
 
+    def test_input_receipts_attach_to_their_session(self):
+        log = self.root / "coordinator.log"
+        log.write_text(log.read_text()
+                       + "2026-09-26T15:12:00+01:00 CORRECT phase 02 round 1 on phase-02-x (PR #4) model=m\n"
+                       + "2026-09-26T15:12:00+01:00 INPUT fix phase 02 round 1 (phase-02-correct-r1-attempt-1-input.md): instructions 1.2 KB · review findings 3.8 KB [P0-1,P1-2] BLOCKING · GPT's blocking review left out (advisory only)\n")
+        fix = collect(self.root, now=1_790_000_000.0)["packets"][1]["phase_run"]["corrections"][-1]
+        self.assertIn("[P0-1,P1-2] BLOCKING", fix["input"]["receipt"])
+        self.assertTrue(fix["input"]["file"].endswith("phase-02-correct-r1-attempt-1-input.md"))
+
     def test_an_open_correction_is_work_in_progress(self):
         log = self.root / "coordinator.log"
         log.write_text(log.read_text() + "2026-09-26T15:12:00+01:00 CORRECT phase 02 round 1 on phase-02-x (PR #4) model=m\n")

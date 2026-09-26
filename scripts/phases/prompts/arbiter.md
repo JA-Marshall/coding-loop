@@ -3,6 +3,7 @@ Pull request #{{PR}} (branch `{{BRANCH}}`, already checked out, into {{BASE}}) h
 rounds, and the independent reviewers still report BLOCKING findings. Usually that means the fixer and the reviewers are
 circling a question the phase prompt left open, trading one edge case for another.
 
+Findings carry IDs and priorities (P0 and P1 block; P2 and P3 never do). Refer to them by ID.
 Read every review below (oldest first, so you can see what each round changed), the diff, the phase prompt and any owner
 decisions at the end. Use the repository's own docs that the phase prompt names, and read the code on this branch.
 
