@@ -812,6 +812,7 @@ DONE_LINE = re.compile(r"^phase (\d+) already done$")
 REVIEW_LINE = re.compile(r"^REVIEW(?:-ONLY)? phase (\d+)(?: round (\d+))?:? ?(.*)$")
 CORRECT_LINE = re.compile(r"^CORRECT phase (\d+) round (\d+) on (\S+) \(PR #(\d+)\) model=(\S+)$")
 CORRECTED_LINE = re.compile(r"^CORRECTED phase (\d+) round (\d+) exit=(\d+)$")
+ARBITER_LINE = re.compile(r"^ARBITER phase (\d+) round (\d+)(?: on (\S+) \(PR #(\d+)\) model=(\S+).*|: (fixed and pushed|handed to the owner)[^:]*: ?(.*))$")
 REVIEW_TEXT_LIMIT = 20000
 
 
@@ -1006,6 +1007,8 @@ def _describe(argv):
     if "run_phases.sh" in line:
         rest = line.split("run_phases.sh", 1)[1].split()
         return "runner", "run_phases.sh " + (" ".join(rest) or "run")
+    if argv and os.path.basename(argv[0]) == "claude" and "-p" in argv and "fable" in line:
+        return "session", "Fable arbiter"
     if argv and os.path.basename(argv[0]) == "claude" and "-p" in argv:
         return "session", "Claude review" if "Read,Grep,Glob" in line else "Claude session"
     if "codex" in line and " exec" in line and os.path.basename(argv[0]) != "timeout":
@@ -1208,6 +1211,21 @@ def collect_phases(directory, errors, now):
                                       "model": m2.group(5), "started": stamp, "finished": None, "exit_code": None})
             ph["segments"].append({"kind": "fix", "start": stamp, "end": None})
             continue
+        m2 = ARBITER_LINE.match(rest)
+        if m2:
+            stop = None
+            ph = phase(m2.group(1))
+            if m2.group(3):  # the arbiter started: it fixes the branch itself or hands it to the owner
+                ph["segments"].append({"kind": "arbiter", "start": stamp, "end": None})
+                ph["arbiter"] = {"started": stamp, "finished": None, "outcome": None, "summary": None, "model": m2.group(5)}
+            else:
+                for seg in reversed(ph["segments"]):
+                    if seg["kind"] == "arbiter" and seg["end"] is None:
+                        seg["end"] = stamp
+                        break
+                ph["arbiter"] = (ph.get("arbiter") or {}) | {"finished": stamp, "summary": m2.group(7),
+                                                            "outcome": "fixed" if m2.group(6).startswith("fixed") else "handed over"}
+            continue
         m2 = CORRECTED_LINE.match(rest)
         if m2:
             ph = phase(m2.group(1))
@@ -1314,7 +1332,8 @@ def collect_phases(directory, errors, now):
     reviewing = [r for r in rows if r["review"] and r["review"].get("started") and not r["review"].get("posted")
                  and not any("could not post" in n or "no open PR" in n for n in r["review"]["notes"])]
     holders = lock_holders(directory, now)
-    open_corrections = any(c["finished"] is None for r in rows for c in r["corrections"])
+    open_corrections = any(c["finished"] is None for r in rows for c in r["corrections"]) \
+        or any((r.get("arbiter") or {}).get("started") and not r["arbiter"].get("finished") for r in rows)
     died = False
     if not stop and not all_done and (running or reviewing or open_corrections) and not holders["alive"]:
         # The log says work is in progress but no process holds the lock: the runner was
@@ -1384,7 +1403,8 @@ def collect_phases(directory, errors, now):
         """A phase that ended without merging is usually a healthy PR waiting for review or merge."""
         if r["status"] != "stopped":
             return None
-        if not stop and (r["n"] in reviewing_ids or any(c["finished"] is None for c in r["corrections"])):
+        if not stop and (r["n"] in reviewing_ids or any(c["finished"] is None for c in r["corrections"])
+                         or ((r.get("arbiter") or {}).get("started") and not r["arbiter"].get("finished"))):
             return "working"
         if batch["tone"] == "broken" and r["n"] == last_stopped:
             return "broken"
@@ -1431,6 +1451,9 @@ def needs_you(batch, packets):
             if rv.get("advisory") == "BLOCKING":
                 text += " The GPT advisory review flagged a blocking finding; read it before merging."
             return {"kind": "merge", "text": text, "pr": pr, "phase": last["id"] if last else None}
+        if phase == "STOPPED" and "arbiter handed it to the owner" in reason:
+            arb = ((last or {}).get("phase_run") or {}).get("arbiter") or {}
+            return {"kind": "decide", "text": "Phase " + (last["id"].replace("phase-", "") if last else "?") + " was still blocking after the automatic fixes, and the arbiter chose not to force a fix: " + (arb.get("summary") or "see its reasoning in the evidence") + " Read its reasoning, write your decisions in the phase's box, then press Save and fix.", "pr": pr, "phase": last["id"] if last else None}
         if phase == "STOPPED" and "still blocking" in reason:
             return {"kind": "decide", "text": "Phase " + (last["id"].replace("phase-", "") if last else "?") + " is still blocking after the allowed correction rounds. Read the review and decide: fix it yourself, or press Correct for one more round.", "pr": pr, "phase": last["id"] if last else None}
         if phase == "STOPPED" and "working tree not clean" in reason:

@@ -551,6 +551,26 @@ class PhaseRunTest(unittest.TestCase):
         segs = collect(self.root, now=1_790_000_000.0)["packets"][1]["phase_run"]["segments"]
         self.assertIsNotNone(segs[3]["end"], "a dead runner's open segment ends when it died")
 
+    def test_the_arbiter_step(self):
+        log = self.root / "coordinator.log"
+        base = log.read_text()
+        log.write_text(base + "2026-09-26T15:20:00+01:00 ARBITER phase 02 round 4 on phase-02-x (PR #4) model=claude-fable-5-1 effort=xhigh\n")
+        doc = collect(self.root, now=1_790_000_000.0)
+        two = doc["packets"][1]
+        self.assertEqual(doc["batch"]["phase"], "RUN", "an arbiter at work is work in progress")
+        self.assertEqual(two["tone"], "working")
+        self.assertEqual(two["phase_run"]["segments"][-1]["kind"], "arbiter")
+        self.assertIsNone(two["phase_run"]["arbiter"]["finished"])
+        log.write_text(log.read_text()
+                       + "2026-09-26T15:40:00+01:00 ARBITER phase 02 round 4: handed to the owner (exit 0): The reviewers disagree on the data model.\n"
+                       + "2026-09-26T15:40:01+01:00 STOP: phase 02 still blocking after 3 corrections; the arbiter handed it to the owner\n")
+        doc = collect(self.root, now=1_790_000_000.0)
+        arb = doc["packets"][1]["phase_run"]["arbiter"]
+        self.assertEqual((arb["outcome"], arb["summary"]), ("handed over", "The reviewers disagree on the data model."))
+        self.assertEqual(doc["batch"]["needs_you"]["kind"], "decide")
+        self.assertIn("chose not to force a fix", doc["batch"]["needs_you"]["text"])
+        self.assertIn("disagree on the data model", doc["batch"]["needs_you"]["text"])
+
     def test_an_open_correction_is_work_in_progress(self):
         log = self.root / "coordinator.log"
         log.write_text(log.read_text() + "2026-09-26T15:12:00+01:00 CORRECT phase 02 round 1 on phase-02-x (PR #4) model=m\n")

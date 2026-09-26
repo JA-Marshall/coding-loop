@@ -678,7 +678,7 @@ footer.note a{color:var(--running)}
           var sx = x(s.start), sw = Math.max(x(s.end != null ? s.end : end) - sx, 3);
           var name = s.kind === 'fix' ? 'fix ' + (++fixN) : s.kind;
           var when = clock(s.start) + (s.end != null ? '–' + clock(s.end) : ' → now');
-          svg.push('<rect x="' + sx.toFixed(1) + '" y="' + y + '" width="' + sw.toFixed(1) + '" height="16" rx="2" fill="' + (s.kind === 'review' ? 'var(--panel)' : fill) + '" stroke="' + stroke + '"' + (s.kind === 'review' ? ' stroke-dasharray="3 2"' : '') + '><title>' + h(name + ' ' + when) + '</title></rect>');
+          svg.push('<rect x="' + sx.toFixed(1) + '" y="' + y + '" width="' + sw.toFixed(1) + '" height="16" rx="2" fill="' + (s.kind === 'review' ? 'var(--panel)' : s.kind === 'arbiter' ? 'var(--attention-soft)' : fill) + '" stroke="' + (s.kind === 'arbiter' ? 'var(--attention)' : stroke) + '"' + (s.kind === 'review' ? ' stroke-dasharray="3 2"' : '') + '><title>' + h(name + ' ' + when) + '</title></rect>');
           var text = k === 0 ? label : name;
           if (sw > text.length * 6.2 + 8) svg.push('<text x="' + (sx + 4).toFixed(1) + '" y="' + (y + 11.5) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">' + h(text) + '</text>');
         });
@@ -714,7 +714,7 @@ footer.note a{color:var(--running)}
       '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>running</span>' +
       '<span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>waiting for you</span>' +
       '<span><i style="background:var(--failed-soft);border:1px solid var(--failed)"></i>broke</span>' +
-      (b.mode === 'phases' ? '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>build or fix</span><span><i style="border:1px dashed var(--running)"></i>review</span>' : '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>') +
+      (b.mode === 'phases' ? '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>build or fix</span><span><i style="border:1px dashed var(--running)"></i>review</span><span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>arbiter</span>' : '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>') +
       '<span><i style="background:var(--sunken);border:1px solid var(--hair)"></i>not yet</span></div>' +
       '<figcaption>' + (b.mode === 'phases' ? 'Times come from the coordinator log\'s own timestamps.' : 'Times come from file modification times until the event log ships, so treat them as approximate to a minute.') + '</figcaption></figure>';
   }
@@ -954,6 +954,10 @@ footer.note a{color:var(--running)}
         var took = c.started != null && c.finished != null ? clock(c.started) + '–' + clock(c.finished) : c.started != null ? 'since ' + clock(c.started) : '?';
         return '<div class="check">' + pill + '<span class="mono">fix ' + (ci + 1) + ' · ' + h(took) + ' · ' + h(c.model) + '</span><span class="muted">on ' + h(c.branch) + ' · PR #' + c.pr + '</span></div>';
       }).join('') + '</div>';
+    }
+    if (r.arbiter) {
+      var a = r.arbiter, apill = !a.finished ? '<span class="pill running">working</span>' : a.outcome === 'fixed' ? '<span class="pill verified">fixed it</span>' : '<span class="pill attention">handed to you</span>';
+      corrections += '<div style="display:grid;gap:6px;margin-top:8px"><h3>Arbiter</h3><div class="check">' + apill + '<span class="mono">' + h(a.model || 'arbiter') + ' · ' + h(clock(a.started)) + (a.finished ? '–' + h(clock(a.finished)) : ' → now') + '</span>' + (a.summary ? '<span>' + h(a.summary) + '</span>' : '') + '</div></div>';
     }
     var review = '';
     if (r.review) {
