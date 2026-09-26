@@ -862,7 +862,125 @@ def phase_result(path, directory, errors):
             "result": str(data.get("result") or "").strip(), "cost_usd": data.get("total_cost_usd"),
             "duration_api_s": (data.get("duration_api_ms") or 0) / 1000 if isinstance(data.get("duration_api_ms"), (int, float)) else None,
             "turns": data.get("num_turns"), "session": data.get("session_id"), "model": models[0] if models else None,
+            "context_window": (data["modelUsage"][models[0]] or {}).get("contextWindow") if models and isinstance(data["modelUsage"][models[0]], dict) else None,
             "tokens": tokens, "stop_reason": data.get("stop_reason"), "terminal_reason": data.get("terminal_reason")}
+
+
+# The session result only has usage summed over every turn. How full the context got
+# is in Claude Code's own transcript: each assistant turn records the input it was
+# sent, so the largest input + cache read + cache write is the peak. Transcripts are
+# read incrementally and cached, because a running session's file grows every poll.
+
+CLAUDE_PROJECTS = Path(os.environ.get("CLAUDE_PROJECTS_DIR", "~/.claude/projects")).expanduser()
+_CONTEXT_CACHE = {}
+_TRANSCRIPT_CACHE = {}
+SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def transcript_context(path):
+    """{"peak", "last", "turns"} for one transcript's main thread, or None."""
+    if path is None:
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = str(path)
+    entry = _CONTEXT_CACHE.get(key)
+    if entry is None or entry["inode"] != st.st_ino or st.st_size < entry["offset"]:
+        entry = {"inode": st.st_ino, "offset": 0, "peak": 0, "last": 0, "ids": set()}
+    if st.st_size > entry["offset"]:
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(entry["offset"])
+                chunk = fh.read()
+        except OSError:
+            return None
+        end = chunk.rfind(b"\n") + 1  # only whole lines; a half-written one waits for the next poll
+        for raw in chunk[:end].splitlines():
+            if b'"usage"' not in raw:
+                continue
+            try:
+                record = json.loads(raw)
+            except ValueError:
+                continue
+            message = record.get("message")
+            if record.get("type") != "assistant" or record.get("isSidechain") or not isinstance(message, dict):
+                continue
+            usage = message.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            size = sum(usage[k] for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+                       if type(usage.get(k)) is int)
+            entry["peak"], entry["last"] = max(entry["peak"], size), size
+            entry["ids"].add(message.get("id") or record.get("uuid"))
+        entry["offset"] += end
+    _CONTEXT_CACHE[key] = entry
+    if not entry["ids"]:
+        return None
+    return {"peak": entry["peak"], "last": entry["last"], "turns": len(entry["ids"])}
+
+
+def session_transcript(session):
+    """A finished session's transcript, found by its id under any project folder."""
+    if not isinstance(session, str) or not SESSION_ID.match(session):
+        return None
+    if session not in _TRANSCRIPT_CACHE or not _TRANSCRIPT_CACHE[session].is_file():
+        hits = sorted(CLAUDE_PROJECTS.glob("*/" + session + ".jsonl"))
+        if not hits:
+            return None
+        _TRANSCRIPT_CACHE[session] = hits[0]
+    return _TRANSCRIPT_CACHE[session]
+
+
+def first_user_text(path, max_lines=40):
+    try:
+        with open(path, "rb") as fh:
+            for _ in range(max_lines):
+                raw = fh.readline()
+                if not raw:
+                    return None
+                try:
+                    record = json.loads(raw)
+                except ValueError:
+                    continue
+                message = record.get("message")
+                if record.get("type") == "user" and isinstance(message, dict) and isinstance(message.get("content"), str):
+                    return message["content"]
+    except OSError:
+        return None
+    return None
+
+
+def live_transcript(prompt_path, started):
+    """A running phase session's transcript: in the folder Claude Code keeps for the prompt's
+    repository, written since the phase started, and opening with the phase prompt."""
+    if not prompt_path or started is None:
+        return None
+    key = (prompt_path, started)
+    if key in _TRANSCRIPT_CACHE:
+        return _TRANSCRIPT_CACHE[key]
+    prompt = Path(prompt_path)
+    repo = next((d for d in prompt.parents if (d / ".git").exists()), None)
+    try:
+        heading = prompt.read_text(errors="replace").split("\n", 1)[0].strip()
+    except OSError:
+        return None
+    if repo is None or not heading:
+        return None
+    # Claude Code names a project's folder after its path with every other character a hyphen.
+    folder = CLAUDE_PROJECTS / re.sub(r"[^A-Za-z0-9]", "-", str(repo))
+    try:
+        candidates = sorted((p for p in folder.glob("*.jsonl") if p.stat().st_mtime >= started - 5),
+                            key=lambda p: -p.stat().st_mtime)
+    except OSError:
+        return None
+    for path in candidates:
+        text = first_user_text(path)
+        if text is not None and text.split("\n", 1)[0].strip() == heading:
+            _TRANSCRIPT_CACHE[key] = path
+            return path
+    return None
 
 
 def collect_phases(directory, errors, now):
@@ -1029,6 +1147,14 @@ def collect_phases(directory, errors, now):
             ph["output"] = str(out.resolve())
             if ph["result"] and ph["result"].get("is_error") and ph["status"] != "stopped":
                 ph["status"] = "stopped"
+        result = ph.get("result") or {}
+        if result.get("session"):
+            context = transcript_context(session_transcript(result["session"]))
+        elif ph["status"] == "running":
+            context = transcript_context(live_transcript(ph.get("prompt"), ph.get("started")))
+        else:
+            context = None
+        ph["context"] = (context | {"window": result.get("context_window"), "live": not result.get("session")}) if context else None
         err = directory / f"phase-{number}.err"
         if err.is_file():
             ph["stderr"] = str(err.resolve())
