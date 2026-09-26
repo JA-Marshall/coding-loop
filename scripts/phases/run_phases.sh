@@ -41,6 +41,9 @@ REVIEW_MODEL="${REVIEW_MODEL:-claude-opus-5-5}"
 ADVISORY_MODEL="${ADVISORY_MODEL:-gpt-5.6-sol}"
 ADVISORY_GATES="${ADVISORY_GATES:-0}"                    # 1: an advisory BLOCKING verdict also blocks
 MAX_CORRECTIONS="${MAX_CORRECTIONS:-2}"
+ARBITER_MODEL="${ARBITER_MODEL:-}"                       # e.g. claude-fable-5-1: after MAX_CORRECTIONS, fixes it itself or hands it to the owner; empty = stop for the owner
+ARBITER_EFFORT="${ARBITER_EFFORT:-xhigh}"
+ARBITER_TIMEOUT="${ARBITER_TIMEOUT:-5400}"
 PHASE_TIMEOUT="${PHASE_TIMEOUT:-10800}"
 REVIEW_TIMEOUT="${REVIEW_TIMEOUT:-1800}"
 CORRECT_TIMEOUT="${CORRECT_TIMEOUT:-5400}"
@@ -128,6 +131,111 @@ owner_decisions() {
   [ -s "$f" ] || return 0
   echo; echo "===== OWNER DECISIONS FOR PHASE $1 (final: they override the phase prompt, and a reviewer must not flag what they settle) ====="
   cat "$f"
+}
+
+notify() {
+  # notify <text> : one message to the Discord webhook the monitor uses (NOTIFY_WEBHOOK and MONITOR_URL, from the
+  # environment or ~/.config/coding-loop/notify.env). A failed post is logged and never stops the run.
+  python3 - "$1" "$(basename "$LOG")" <<'NOTIFY_PY' 2>> "$LOG/notify.err" || true
+import json, os, sys, urllib.request
+from pathlib import Path
+text, batch = sys.argv[1], sys.argv[2]
+settings = {k: os.environ.get(k) for k in ("NOTIFY_WEBHOOK", "MONITOR_URL")}
+try:
+    for line in Path("~/.config/coding-loop/notify.env").expanduser().read_text().splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() in settings and not settings[key.strip()]:
+            settings[key.strip()] = value.strip().strip('"').strip("'")
+except OSError:
+    pass
+if not settings["NOTIFY_WEBHOOK"]:
+    sys.exit(0)
+if settings["MONITOR_URL"]:
+    text += "\n" + settings["MONITOR_URL"].rstrip("/") + "/?batch=" + batch
+request = urllib.request.Request(settings["NOTIFY_WEBHOOK"], data=json.dumps({"content": text[:1990]}).encode(),
+                                 headers={"Content-Type": "application/json", "User-Agent": "coding-loop-runner"})
+try:
+    urllib.request.urlopen(request, timeout=10)
+except Exception as exc:  # the webhook address is never printed
+    print("notify failed:", type(exc).__name__, file=sys.stderr)
+NOTIFY_PY
+}
+
+arbitrate_phase() {
+  # arbitrate_phase <n> <phase file> <round> : the phase is still blocking after MAX_CORRECTIONS fixes. ARBITER_MODEL
+  # reads every review, the diff, the prompt and the owner's decisions, and takes one of two options: fix it itself on
+  # the branch (recording the rules it settled in phase-NN-owner.md), or change nothing and hand it to the owner.
+  # Returns 0 only when it fixed and pushed.
+  local n=$1 file=$2 round=$3 pr branch url attempt stem before after
+  pr=$(find_pr "$n")
+  [ -z "$pr" ] && return 1
+  [ -f "$PROMPT_DIR/arbiter.md" ] || { log "ARBITER phase $n: no $PROMPT_DIR/arbiter.md template"; return 1; }
+  branch=$(gh pr view "$pr" -R "$GH_REPO" --json headRefName --jq .headRefName)
+  url="https://github.com/$GH_REPO/pull/$pr"
+  git -C "$REPO" fetch -q origin && git -C "$REPO" switch -q "$branch" && git -C "$REPO" pull -q --ff-only origin "$branch" || return 1
+  before=$(git -C "$REPO" rev-parse HEAD)
+  attempt=$(next_attempt "$LOG/phase-$n-arbiter")
+  stem="$LOG/phase-$n-arbiter-attempt-$attempt"
+  { render "$PROMPT_DIR/arbiter.md" SITE="$SITE" PR="$pr" BRANCH="$branch" BASE="$BASE_BRANCH" PHASE="$n" FIXES="$MAX_CORRECTIONS" STATUS_FILE="$STATUS_FILE"
+    echo; echo "===== EVERY REVIEW OF THIS PHASE, OLDEST FIRST ====="
+    for f in $(ls -tr "$LOG"/phase-"$n"-review-r*-attempt-*-claude.md "$LOG"/phase-"$n"-review-r*-attempt-*-gpt.md 2>/dev/null); do
+      echo; echo "----- $(basename "$f") -----"; cat "$f"
+    done
+    echo; echo "===== PULL REQUEST #$pr ($branch -> $BASE_BRANCH) DIFF ====="; gh pr diff "$pr" -R "$GH_REPO"
+    echo; echo "===== PHASE PROMPT ====="; cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
+  log "ARBITER phase $n round $round on $branch (PR #$pr) model=$ARBITER_MODEL effort=$ARBITER_EFFORT"
+  event arbiter phase="$n" round="$round" pr="$pr" branch="$branch" model="$ARBITER_MODEL" attempt="$attempt"
+  notify "⚖️ **$(basename "$LOG")** phase $n is still blocking after $MAX_CORRECTIONS fixes. $ARBITER_MODEL ($ARBITER_EFFORT) is looking at it: it will either fix it or hand it to you. $url"
+  ( cd "$REPO" && timeout "$ARBITER_TIMEOUT" claude -p --strict-mcp-config --mcp-config "$WORKER_MCP" --model "$ARBITER_MODEL" --effort "$ARBITER_EFFORT" \
+      --permission-mode auto --output-format json < "$stem-input.md" > "$stem.json" 2> "$stem.err" )
+  local code=$? outcome summary
+  git -C "$REPO" fetch -q origin
+  after=$(git -C "$REPO" rev-parse "origin/$branch" 2>/dev/null)
+  outcome=$(python3 - "$stem.json" "$stem.md" "$stem-decisions.md" "$before" "$after" <<'ARBITER_PY'
+import json, re, sys
+raw = open(sys.argv[1], encoding="utf-8", errors="replace").read().strip().splitlines()
+try:
+    text = str(json.loads(raw[-1]).get("result") or "") if raw else ""
+except ValueError:
+    text = ""
+open(sys.argv[2], "w", encoding="utf-8").write(text + "\n")
+verdict = re.findall(r"^ARBITER:\s*(FIXED|ESCALATE)\s*$", text, re.M)
+summary = (re.findall(r"^SUMMARY:\s*(.+)$", text, re.M) or [""])[-1].strip()
+block = re.search(r"^BEGIN DECISIONS\s*$(.*?)^END DECISIONS\s*$", text, re.M | re.S)
+decisions = block.group(1).strip() if block else ""
+pushed = bool(sys.argv[5]) and sys.argv[4] != sys.argv[5]
+fixed = bool(verdict) and verdict[-1] == "FIXED" and pushed
+if fixed and decisions:
+    open(sys.argv[3], "w", encoding="utf-8").write(decisions + "\n")
+if verdict and verdict[-1] == "FIXED" and not pushed:
+    summary = "It said FIXED but pushed no commit, so nothing changed. " + summary
+print(("FIXED" if fixed else "ESCALATE") + "\t" + (summary or "no summary given").replace("\t", " "))
+ARBITER_PY
+)
+  git -C "$REPO" switch -q "$BASE_BRANCH" 2>/dev/null
+  summary=${outcome#*$'\t'}
+  if [ $code -ne 0 ] || [ "${outcome%%$'\t'*}" != "FIXED" ]; then
+    log "ARBITER phase $n round $round: handed to the owner (exit $code): $summary"
+    event arbiter_done phase="$n" round="$round" outcome="escalated" exit="$code" summary="${summary:0:300}"
+    notify "⚖️ **$(basename "$LOG")** phase $n: $ARBITER_MODEL did not force a fix and hands it to you. $summary
+Its full reasoning: $(basename "$stem.md") in the run's evidence. $url"
+    return 1
+  fi
+  if [ -s "$stem-decisions.md" ]; then
+    local owner="$LOG/phase-$n-owner.md"
+    { [ -s "$owner" ] && { cat "$owner"; echo; }
+      echo "## Settled by $ARBITER_MODEL ($ARBITER_EFFORT) on $(date '+%Y-%m-%d %H:%M'), after $MAX_CORRECTIONS fixes"
+      echo "It fixed the branch following these rules. Edit or delete this section if you disagree."
+      echo; cat "$stem-decisions.md"; } > "$owner.tmp" && mv "$owner.tmp" "$owner"
+  fi
+  log "ARBITER phase $n round $round: fixed and pushed: $summary"
+  event arbiter_done phase="$n" round="$round" outcome="fixed" exit="$code" summary="${summary:0:300}"
+  notify "⚖️ **$(basename "$LOG")** phase $n: $ARBITER_MODEL fixed it and pushed. $summary
+A review is starting now. The rules it settled are in the phase's decisions box on the monitor; edit them if you disagree.
+\`\`\`
+$(head -c 1000 "$stem-decisions.md" 2>/dev/null)
+\`\`\`"
+  return 0
 }
 
 verdict_in() { grep -q '^VERDICT: CLEAN' "$1" && echo CLEAN || { grep -q '^VERDICT: BLOCKING' "$1" && echo BLOCKING || echo UNKNOWN; }; }
@@ -218,12 +326,19 @@ correct_phase() {
 }
 
 review_until_clean() {
-  # review_until_clean <n> <file> <model> : review, correct, review... within MAX_CORRECTIONS. Exit codes end the loop.
-  local n=$1 file=$2 model=$3 round=${REVIEW_ROUND_START:-0}
+  # review_until_clean <n> <file> <model> : review, correct, review... within MAX_CORRECTIONS. Then, once per phase,
+  # ARBITER_MODEL either fixes it (and a review follows) or hands it to the owner. Exit codes end the loop.
+  local n=$1 file=$2 model=$3 round=${REVIEW_ROUND_START:-0} arbitrated=0
   until review_phase "$n" "$file" "$round"; do
     round=$((round + 1))
     if [ "$round" -gt "$MAX_CORRECTIONS" ]; then
-      log "STOP: phase $n still blocking after $MAX_CORRECTIONS corrections; owner decides"
+      if [ "$arbitrated" = 0 ] && [ -n "$ARBITER_MODEL" ] && ! ls "$LOG/phase-$n-arbiter-attempt-"*-input.md >/dev/null 2>&1; then
+        check_stop "arbitration of phase $n"
+        if arbitrate_phase "$n" "$file" "$round"; then arbitrated=1; continue; fi
+        log "STOP: phase $n still blocking after $MAX_CORRECTIONS corrections; the arbiter handed it to the owner"
+        event stop phase="$n" reason="still blocking after $MAX_CORRECTIONS corrections; the arbiter handed it to the owner"; exit 3
+      fi
+      log "STOP: phase $n still blocking after $MAX_CORRECTIONS corrections$([ "$arbitrated" = 1 ] && echo " and the arbiter's fix"); owner decides"
       event stop phase="$n" reason="still blocking after $MAX_CORRECTIONS corrections"; exit 3
     fi
     check_stop "correction round $round of phase $n"
