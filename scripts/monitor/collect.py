@@ -1254,6 +1254,11 @@ def collect_phases(directory, errors, now):
             errors.append({"file": "events.jsonl", "message": exc.strerror or str(exc)})
     for number in order:
         ph = phases[number]
+        owner = directory / f"phase-{number}-owner.md"  # the owner's final decisions for this phase
+        try:
+            ph["owner"] = {"text": owner.read_text(errors="replace")[:20000], "at": mtime(owner)} if owner.is_file() else None
+        except OSError:
+            ph["owner"] = None
         for label, suffix in (("claude", "-review-claude.md"), ("gpt", "-review-gpt.md"), ("combined", "-review.md")):
             path = directory / f"phase-{number}{suffix}"
             if path.is_file():
