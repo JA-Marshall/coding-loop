@@ -1,0 +1,261 @@
+<title>Batch Board</title>
+<style>
+:root{
+  color-scheme:light;
+  --base:oklch(0.965 0.004 264);--panel:oklch(0.995 0.002 264);--raised:oklch(0.935 0.005 264);--sunken:oklch(0.945 0.004 264);
+  --hair:oklch(0.86 0.008 264);--fg:oklch(0.22 0.01 264);--muted:oklch(0.48 0.012 264);
+  --running:oklch(0.5 0.11 232);--running-soft:oklch(0.92 0.03 232);
+  --attention:oklch(0.58 0.14 78);--attention-soft:oklch(0.94 0.05 78);
+  --verified:oklch(0.5 0.14 155);--verified-soft:oklch(0.93 0.05 155);
+  --failed:oklch(0.53 0.18 25);--failed-soft:oklch(0.94 0.05 25);
+  --claim:oklch(0.55 0.012 264);--diff-add:oklch(0.5 0.07 152);--diff-del:oklch(0.5 0.08 32);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --base:oklch(0.168 0.005 264);--panel:oklch(0.203 0.006 264);--raised:oklch(0.243 0.006 264);--sunken:oklch(0.145 0.005 264);
+  --hair:oklch(0.315 0.008 264);--fg:oklch(0.935 0.004 264);--muted:oklch(0.715 0.009 264);
+  --running:oklch(0.755 0.098 232);--running-soft:oklch(0.3 0.045 232);
+  --attention:oklch(0.8 0.125 78);--attention-soft:oklch(0.33 0.055 78);
+  --verified:oklch(0.755 0.135 155);--verified-soft:oklch(0.3 0.05 155);
+  --failed:oklch(0.68 0.165 25);--failed-soft:oklch(0.31 0.07 25);
+  --claim:oklch(0.63 0.012 264);--diff-add:oklch(0.82 0.055 152);--diff-del:oklch(0.79 0.055 32);
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --base:oklch(0.168 0.005 264);--panel:oklch(0.203 0.006 264);--raised:oklch(0.243 0.006 264);--sunken:oklch(0.145 0.005 264);
+  --hair:oklch(0.315 0.008 264);--fg:oklch(0.935 0.004 264);--muted:oklch(0.715 0.009 264);
+  --running:oklch(0.755 0.098 232);--running-soft:oklch(0.3 0.045 232);
+  --attention:oklch(0.8 0.125 78);--attention-soft:oklch(0.33 0.055 78);
+  --verified:oklch(0.755 0.135 155);--verified-soft:oklch(0.3 0.05 155);
+  --failed:oklch(0.68 0.165 25);--failed-soft:oklch(0.31 0.07 25);
+  --claim:oklch(0.63 0.012 264);--diff-add:oklch(0.82 0.055 152);--diff-del:oklch(0.79 0.055 32);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--base);color:var(--fg);font:13px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 48px;display:grid;gap:14px}
+.mono,code,.num{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.num{text-align:right}
+h1,h2,h3{margin:0;font-weight:600}
+h1{font-size:15px}h2{font-size:12.5px}h3{font-size:12px}
+.muted{color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--hair);border-radius:6px}
+.panel>header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px;padding:9px 14px;border-bottom:1px solid var(--hair)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);vertical-align:middle}
+.dot.running{background:var(--running);animation:pulse 2.5s ease-in-out infinite}
+.dot.verified{background:var(--verified)}.dot.attention{background:var(--attention)}.dot.failed{background:var(--failed)}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot.running{animation:none}}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:1px 8px;border-radius:999px;border:1px solid var(--hair);font:11px/1.6 var(--sans);color:var(--muted);background:var(--raised)}
+.pill.running{color:var(--running);border-color:color-mix(in oklch,var(--running) 40%,transparent);background:var(--running-soft)}
+.pill.verified{color:var(--verified);border-color:color-mix(in oklch,var(--verified) 40%,transparent);background:var(--verified-soft)}
+.pill.attention{color:var(--attention);border-color:color-mix(in oklch,var(--attention) 45%,transparent);background:var(--attention-soft)}
+.pill.failed{color:var(--failed);border-color:color-mix(in oklch,var(--failed) 45%,transparent);background:var(--failed-soft)}
+
+/* 1 header strip */
+.strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:12px 14px}
+.strip .id{display:flex;align-items:center;gap:10px}
+.strip .phase{display:flex;align-items:center;gap:8px}
+.strip .right{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted)}
+.strip .right b{color:var(--fg);font-weight:500}
+
+/* 2 meters */
+.meters{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--hair);border:1px solid var(--hair);border-radius:6px;overflow:hidden}
+.meter{background:var(--panel);padding:10px 14px 12px;display:grid;gap:6px}
+.meter .lab{display:flex;justify-content:space-between;align-items:baseline}
+.meter .lab span:first-child{font-weight:600;font-size:12px}
+.bar{height:4px;background:var(--raised);border-radius:2px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--running);border-radius:2px}
+.bar.attention i{background:var(--attention)}
+.meter .sub{color:var(--muted);font-size:11.5px}
+
+
+/* tape */
+.tape{display:grid;gap:8px;padding:12px 14px}
+.tape svg{width:100%;height:auto;display:block}
+.tape .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--muted)}
+.legend i{display:inline-block;width:14px;height:8px;vertical-align:middle;margin-right:6px;border-radius:1px}
+.tape figcaption{font-size:11.5px;color:var(--muted)}
+
+/* 3 rail */
+table{width:100%;border-collapse:collapse}
+.rail th{font:600 11px/1.4 var(--sans);letter-spacing:.03em;text-transform:uppercase;color:var(--muted);text-align:left;padding:6px 14px;border-bottom:1px solid var(--hair)}
+.rail th.num{text-align:right}
+.rail td{padding:8px 14px;border-bottom:1px solid var(--hair);vertical-align:middle}
+.rail tr:last-child td{border-bottom:0}
+.rail tr{border-left:3px solid transparent}
+.rail tr.running{border-left-color:var(--running);background:color-mix(in oklch,var(--running-soft) 40%,transparent)}
+.rail tr.verified{border-left-color:var(--verified)}
+.rail td.title{max-width:0}
+.rail td.title .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rail td.title .s{color:var(--muted);font-size:11.5px}
+.rail a{color:var(--verified);text-decoration:none}
+.rail .q{color:var(--muted)}
+
+/* 4 detail */
+.detail{display:grid;gap:14px;padding:14px}
+.stages{display:grid;gap:6px}
+.stage{display:flex;flex-wrap:wrap;align-items:center;gap:0}
+.stage span{font:500 11px/1 var(--mono);letter-spacing:.04em;padding:5px 9px;border:1px solid var(--hair);color:var(--muted);background:var(--raised);position:relative}
+.stage span+span{margin-left:-1px}
+.stage span:first-child{border-radius:4px 0 0 4px}.stage span:last-child{border-radius:0 4px 4px 0}
+.stage span.done{color:var(--verified);border-color:color-mix(in oklch,var(--verified) 40%,transparent);background:var(--verified-soft)}
+.stage span.now{color:var(--running);border-color:var(--running);background:var(--running-soft);z-index:1}
+.stage .lab{font:11px/1 var(--sans);letter-spacing:0;border:0;background:none;color:var(--muted);padding:5px 8px 5px 0;width:52px}
+.calls td{padding:5px 8px;border-bottom:1px solid var(--hair);vertical-align:top}
+.calls tr:last-child td{border-bottom:0}
+.calls td:first-child{width:24px;color:var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.card{border:1px solid var(--hair);border-radius:6px;background:var(--panel);display:grid;grid-template-rows:auto 1fr}
+.card>header{padding:8px 12px;border-bottom:1px solid var(--hair);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.card>div{padding:10px 12px;display:grid;gap:8px;align-content:start}
+.card.claim{border-style:dashed;color:var(--claim)}
+.card.claim h3{color:var(--claim)}
+.check{display:grid;grid-template-columns:auto 1fr auto;gap:4px 10px;align-items:baseline}
+.check .log{grid-column:1/-1;background:var(--sunken);border:1px solid var(--hair);border-radius:4px;padding:8px 10px;white-space:pre;overflow-x:auto;font-size:11.5px;line-height:1.5;color:var(--muted)}
+.finding{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;padding:8px 10px;border-radius:4px;border:1px solid var(--hair)}
+.finding.blocking{border-color:color-mix(in oklch,var(--failed) 45%,transparent);background:var(--failed-soft)}
+.finding .tag{font:600 10.5px/1.6 var(--sans);letter-spacing:.03em;text-transform:uppercase;white-space:nowrap}
+.finding.blocking .tag{color:var(--failed)}
+.finding .tag.note{color:var(--muted)}
+.path{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.path code{background:var(--sunken);border:1px solid var(--hair);padding:2px 6px;border-radius:3px;overflow-wrap:anywhere}
+button{font:500 11.5px/1 var(--sans);padding:5px 9px;border:1px solid var(--hair);background:var(--raised);color:var(--fg);border-radius:4px;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--running);outline-offset:2px}
+.add{color:var(--diff-add)}.del{color:var(--diff-del)}
+footer.note{color:var(--muted);font-size:11.5px;text-align:center}
+@media (max-width:760px){
+  .meters{grid-template-columns:1fr 1fr}
+  .two{grid-template-columns:1fr}
+  .rail th:nth-child(5),.rail td:nth-child(5),.rail th:nth-child(6),.rail td:nth-child(6){display:none}
+}
+@media (max-width:480px){.meters{grid-template-columns:1fr}.rail th:nth-child(4),.rail td:nth-child(4){display:none}}
+</style>
+
+<div class="wrap">
+
+  <section class="panel strip" aria-label="Batch status">
+    <div class="id"><span class="dot running" aria-hidden="true"></span><h1>ebay-01</h1><span class="muted">JA-Marshall/Ebay-Inventory-and-Order-Management-System</span></div>
+    <div class="phase"><span class="pill running">RUN</span><span class="muted">packet 3 of 4</span></div>
+    <div class="right">
+      <span>last checkpoint <b>4 min ago</b></span>
+      <span>unit <b>storehouse-ebay-01 active</b></span>
+      <span>started <b>23:04</b> · deadline <b>07:04</b></span>
+    </div>
+  </section>
+
+  <section class="meters" aria-label="Budgets">
+    <div class="meter"><div class="lab"><span>Wall clock</span><span class="num">2 h 32 m / 8 h</span></div><div class="bar"><i style="width:32%"></i></div><div class="sub">5 h 28 m left</div></div>
+    <div class="meter"><div class="lab"><span>Model calls</span><span class="num">9 / 24</span></div><div class="bar"><i style="width:37.5%"></i></div><div class="sub">15 left for 2 packets</div></div>
+    <div class="meter"><div class="lab"><span>Reported tokens</span><span class="num">1,412,380 / 4,000,000</span></div><div class="bar"><i style="width:35%"></i></div><div class="sub">accounting complete</div></div>
+    <div class="meter"><div class="lab"><span>This packet</span><span class="num">3 / 6 calls</span></div><div class="bar attention"><i style="width:50%"></i></div><div class="sub">correction 1 of 2 used</div></div>
+  </section>
+
+  <figure class="panel tape" style="margin:0">
+    <header style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:0 0 8px;border-bottom:1px solid var(--hair)"><h2>Tonight</h2><span class="muted">23:04 to the 07:04 deadline · each tick is one model call</span></header>
+    <svg viewBox="0 0 1000 132" role="img" aria-label="Timeline from 23:00 to 07:00. Packet 1 merged at 23:45, packet 2 merged at 00:43, packet 3 running since 00:43. It is now 01:36. Deadline 07:04.">
+      <g font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="var(--muted)">
+        <text x="20" y="12">23:00</text><text x="140" y="12">00:00</text><text x="260" y="12">01:00</text><text x="380" y="12">02:00</text><text x="500" y="12">03:00</text><text x="620" y="12">04:00</text><text x="740" y="12">05:00</text><text x="860" y="12">06:00</text><text x="962" y="12">07:00</text>
+      </g>
+      <g stroke="var(--hair)" stroke-width="1"><line x1="20" y1="18" x2="20" y2="118"/><line x1="140" y1="18" x2="140" y2="118"/><line x1="260" y1="18" x2="260" y2="118"/><line x1="380" y1="18" x2="380" y2="118"/><line x1="500" y1="18" x2="500" y2="118"/><line x1="620" y1="18" x2="620" y2="118"/><line x1="740" y1="18" x2="740" y2="118"/><line x1="860" y1="18" x2="860" y2="118"/><line x1="980" y1="18" x2="980" y2="118"/></g>
+      <!-- future -->
+      <rect x="332" y="18" width="656" height="100" fill="var(--sunken)" opacity=".5"/>
+      <text x="660" y="72" font-family="system-ui,sans-serif" font-size="11" fill="var(--muted)" text-anchor="middle">5 h 28 m left · 15 calls · packet 4 still to run</text>
+      <!-- P1 23:04-23:45 -->
+      <rect x="28" y="26" width="82" height="16" rx="2" fill="var(--verified-soft)" stroke="var(--verified)"/>
+      <text x="33" y="37.5" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">P1 · #110</text>
+      <g fill="var(--fg)" opacity=".7"><rect x="30" y="45" width="2" height="7"/><rect x="68" y="45" width="2" height="7"/><rect x="92" y="45" width="2" height="7"/></g>
+      <!-- P2 23:45-00:43 -->
+      <rect x="110" y="56" width="116" height="16" rx="2" fill="var(--verified-soft)" stroke="var(--verified)"/>
+      <text x="115" y="67.5" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">P2 · #112 · 1 correction</text>
+      <g fill="var(--fg)" opacity=".7"><rect x="112" y="75" width="2" height="7"/><rect x="156" y="75" width="2" height="7"/><rect x="180" y="75" width="2" height="7"/><rect x="216" y="75" width="2" height="7"/></g>
+      <!-- P3 00:43-now -->
+      <rect x="226" y="86" width="106" height="16" rx="2" fill="var(--running-soft)" stroke="var(--running)"/>
+      <text x="231" y="97.5" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">P3 · CHECKS</text>
+      <g fill="var(--fg)" opacity=".7"><rect x="228" y="105" width="2" height="7"/><rect x="280" y="105" width="2" height="7"/><rect x="304" y="105" width="2" height="7"/></g>
+      <!-- now -->
+      <line x1="332" y1="18" x2="332" y2="122" stroke="var(--running)" stroke-width="2"/>
+      <text x="337" y="128" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="var(--running)">now 01:36</text>
+      <!-- deadline -->
+      <line x1="988" y1="18" x2="988" y2="122" stroke="var(--attention)" stroke-width="1.5" stroke-dasharray="3 3"/>
+      <text x="983" y="128" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="var(--attention)" text-anchor="end">deadline 07:04</text>
+    </svg>
+    <div class="legend"><span><i style="background:var(--verified-soft);border:1px solid var(--verified)"></i>merged</span><span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>running</span><span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span><span><i style="background:var(--sunken);border:1px solid var(--hair)"></i>not yet</span></div>
+    <figcaption>Times come from file modification times until the event log ships, so treat them as approximate to a minute.</figcaption>
+  </figure>
+
+  <section class="panel" aria-label="Packet queue">
+    <header><h2>Queue</h2><span class="muted">2 merged · 1 running · 1 queued</span></header>
+    <table class="rail">
+      <thead><tr><th></th><th>Packet</th><th>State</th><th class="num">Calls</th><th class="num">Corr.</th><th class="num">Tokens</th><th class="num">Time</th></tr></thead>
+      <tbody>
+        <tr class="verified"><td><span class="dot verified" aria-hidden="true"></span></td><td class="title"><div class="t">Import orders promptly and consume grants once</div><div class="s mono">selling-order-ingestion-and-grant-consumption</div></td><td><a href="https://github.com/JA-Marshall/Ebay-Inventory-and-Order-Management-System./pull/110">merged #110</a></td><td class="num">3</td><td class="num">0</td><td class="num">388,120</td><td class="num">41 m</td></tr>
+        <tr class="verified"><td><span class="dot verified" aria-hidden="true"></span></td><td class="title"><div class="t">Apply bounded eBay stock updates</div><div class="s mono">selling-ebay-stock-updates</div></td><td><a href="https://github.com/JA-Marshall/Ebay-Inventory-and-Order-Management-System./pull/112">merged #112</a></td><td class="num">4</td><td class="num">1</td><td class="num">611,900</td><td class="num">58 m</td></tr>
+        <tr class="running"><td><span class="dot running" aria-hidden="true"></span></td><td class="title"><div class="t">Switch test-report evidence with supplied stock</div><div class="s mono">selling-current-stock-report-handover</div></td><td><span class="pill running">CHECKS</span></td><td class="num">3</td><td class="num">1</td><td class="num">412,360</td><td class="num">53 m</td></tr>
+        <tr><td><span class="dot" aria-hidden="true"></span></td><td class="title"><div class="t">Create eBay listings from Selling and retire them to zero quantity</div><div class="s mono">selling-ebay-create-and-lifecycle</div></td><td class="q">queued · advisory review</td><td class="num q">–</td><td class="num q">–</td><td class="num q">–</td><td class="num q">–</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel" aria-label="Packet detail">
+    <header><h2>selling-current-stock-report-handover</h2><span class="muted">worker claude-opus-5-5 · reasoning high · owns 4 files</span></header>
+    <div class="detail">
+
+      <div class="stages">
+        <div class="stage"><span class="lab">packet</span><span class="done">IMPLEMENT</span><span class="done">APPLYING</span><span class="now">CHECKS</span><span>REVIEW</span><span>LOCAL_REVIEWED</span></div>
+        <div class="stage"><span class="lab">batch</span><span>COMMIT</span><span>PUSH</span><span>PR</span><span>CI</span><span>MERGE</span></div>
+      </div>
+
+      <div>
+        <h3 style="margin-bottom:6px">Model calls</h3>
+        <table class="calls">
+          <tr><td class="num">1</td><td>worker</td><td class="mono">claude-opus-5-5</td><td class="num">142,300</td><td class="muted">candidate a1 · applied</td></tr>
+          <tr><td class="num">2</td><td>reviewer</td><td class="mono">claude-opus-5-5</td><td class="num">141,900</td><td><span class="pill failed">1 blocking</span> <span class="muted">2 notes</span></td></tr>
+          <tr><td class="num">3</td><td>worker</td><td class="mono">claude-opus-5-5</td><td class="num">128,160</td><td class="muted">candidate a2 · applied · checks running</td></tr>
+        </table>
+      </div>
+
+      <div class="two">
+        <div class="card">
+          <header><h3>Checks the supervisor ran</h3><span class="muted mono">correction 1</span></header>
+          <div>
+            <div class="check"><span class="pill running">running</span><span class="mono">django · 3 m 12 s</span><span class="muted">test_labels: selling</span></div>
+            <div class="check"><span class="pill">pending</span><span class="mono">plans</span><span class="muted">validate_plans.py</span></div>
+            <div class="check"><span class="pill failed">exit 1</span><span class="mono">django · correction 0</span><button type="button">hide tail</button>
+              <div class="log">FAIL: test_handover_rejects_withdrawn_batch (selling.tests.test_handover)
+AssertionError: report PH-R32C still bound to withdrawn batch after handover
+----------------------------------------------------------------------
+Ran 214 tests in 31.4s
+FAILED (failures=1)</div></div>
+            <div class="check"><span class="pill verified">exit 0</span><span class="mono">plans · correction 0</span><span class="muted">2.1 s</span></div>
+          </div>
+        </div>
+        <div class="card claim">
+          <header><h3>What the worker says it did</h3><span class="pill">unverified claim</span></header>
+          <div>
+            <p style="margin:0">Switched the report evidence binding to the supplied stock batch inside a single transaction, added a regression test for the withdrawn-batch case, and updated the plan file's progress log. Checks were not run, as instructed.</p>
+            <p style="margin:0;font-size:11.5px">The supervisor does not act on any of this text. The checks and the review decide.</p>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;gap:8px">
+        <h3>Review of candidate a1</h3>
+        <div class="finding blocking"><span class="tag">blocking</span><span>Handover writes the new batch id before the withdrawal transaction commits, so a failed withdrawal leaves the report pointing at stock that was never supplied. Put both writes in one atomic block.</span></div>
+        <div class="finding"><span class="tag note">note</span><span>Test names still describe the old behaviour (<code>test_handover_keeps_report</code>).</span></div>
+        <div class="finding"><span class="tag note">note</span><span>The docstring on <code>handover()</code> says eBay where it means the website channel.</span></div>
+        <span class="muted" style="font-size:11.5px">Notes travel into the PR body. They never cost a correction.</span>
+      </div>
+
+      <div class="path">
+        <h3>Candidate a2</h3>
+        <span class="mono">4 files · <span class="add">+118</span> <span class="del">−22</span></span>
+        <code>~/.local/share/storehouse-runner/ebay-01/selling-current-stock-report-handover/runner/candidate.diff</code>
+        <button type="button">copy path</button>
+      </div>
+
+    </div>
+  </section>
+
+  <footer class="note">Read-only. Evidence stays on disk at <span class="mono">~/.local/share/storehouse-runner/ebay-01</span>. Polled every 3 s.</footer>
+</div>

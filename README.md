@@ -117,3 +117,19 @@ This was extracted, not generalised. Things you will want to change:
 ## Origin
 
 Built on 26 September 2026 in a single Codex session with GPT-6 Astra, starting from the prompt "can you come up with a prompt to build the runner, or just start building it". Extended the same day in Claude Code to add Claude as primary reviewer, the independent advisory review, and the Muse worker.
+
+## Watching it run
+
+`scripts/monitor/` is a read-only page over the evidence directories: liveness, budgets, the
+queue, each packet's checks, review and claim, and the reason a run stopped. It reads only, binds
+loopback only, and needs nothing but the standard library and one HTML file.
+
+```
+python3 scripts/monitor/serve.py --directory ~/.local/share/storehouse-runner --directory ~/.local/share/proof-hardware-phases
+```
+
+Point `--directory` at one run, or at a folder of them, and repeat the flag for more trees; the
+page lists every run it finds, newest first. It understands both the coding loop's checkpoints
+and the phase runner's log (`scripts/phases/`). Its only writes are the `STOP` file both loops
+honour and, for phase runs, launching the runner's own `run`, `review` and `correct` commands.
+Its plan and mockup are in `docs/monitor/`.

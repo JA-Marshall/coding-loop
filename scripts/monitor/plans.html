@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plan Board</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Read-only board of the checkout's lifecycle plans: what changed recently, what is executable, and each plan rendered on click.">
+<style>
+:root{
+  color-scheme:light;
+  --base:oklch(0.965 0.004 264);--panel:oklch(0.995 0.002 264);--raised:oklch(0.935 0.005 264);--sunken:oklch(0.945 0.004 264);
+  --hair:oklch(0.86 0.008 264);--fg:oklch(0.22 0.01 264);--muted:oklch(0.48 0.012 264);
+  --running:oklch(0.5 0.11 232);--running-soft:oklch(0.92 0.03 232);
+  --attention:oklch(0.58 0.14 78);--attention-soft:oklch(0.94 0.05 78);
+  --verified:oklch(0.5 0.14 155);--verified-soft:oklch(0.93 0.05 155);
+  --failed:oklch(0.53 0.18 25);--failed-soft:oklch(0.94 0.05 25);
+  --claim:oklch(0.55 0.012 264);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --base:oklch(0.168 0.005 264);--panel:oklch(0.203 0.006 264);--raised:oklch(0.243 0.006 264);--sunken:oklch(0.145 0.005 264);
+  --hair:oklch(0.315 0.008 264);--fg:oklch(0.935 0.004 264);--muted:oklch(0.715 0.009 264);
+  --running:oklch(0.755 0.098 232);--running-soft:oklch(0.3 0.045 232);
+  --attention:oklch(0.8 0.125 78);--attention-soft:oklch(0.33 0.055 78);
+  --verified:oklch(0.755 0.135 155);--verified-soft:oklch(0.3 0.05 155);
+  --failed:oklch(0.68 0.165 25);--failed-soft:oklch(0.31 0.07 25);
+  --claim:oklch(0.63 0.012 264);
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --base:oklch(0.168 0.005 264);--panel:oklch(0.203 0.006 264);--raised:oklch(0.243 0.006 264);--sunken:oklch(0.145 0.005 264);
+  --hair:oklch(0.315 0.008 264);--fg:oklch(0.935 0.004 264);--muted:oklch(0.715 0.009 264);
+  --running:oklch(0.755 0.098 232);--running-soft:oklch(0.3 0.045 232);
+  --attention:oklch(0.8 0.125 78);--attention-soft:oklch(0.33 0.055 78);
+  --verified:oklch(0.755 0.135 155);--verified-soft:oklch(0.3 0.05 155);
+  --failed:oklch(0.68 0.165 25);--failed-soft:oklch(0.31 0.07 25);
+  --claim:oklch(0.63 0.012 264);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--base);color:var(--fg);font:13px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 48px;display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.wrap>*{min-width:0}
+.mono,code,.num{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.num{text-align:right}
+h1,h2,h3{margin:0;font-weight:600}
+h1{font-size:15px}h2{font-size:12.5px}h3{font-size:12px}
+p{margin:0}
+.muted{color:var(--muted)}
+a{color:var(--running)}
+.panel{background:var(--panel);border:1px solid var(--hair);border-radius:6px}
+.panel>header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px;padding:9px 14px;border-bottom:1px solid var(--hair)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);vertical-align:middle;flex:none}
+.dot.running{background:var(--running)}.dot.verified{background:var(--verified)}.dot.attention{background:var(--attention)}.dot.failed{background:var(--failed)}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:1px 8px;border-radius:999px;border:1px solid var(--hair);font:11px/1.6 var(--sans);color:var(--muted);background:var(--raised);white-space:nowrap}
+.pill.running{color:var(--running);border-color:color-mix(in oklch,var(--running) 40%,transparent);background:var(--running-soft)}
+.pill.verified{color:var(--verified);border-color:color-mix(in oklch,var(--verified) 40%,transparent);background:var(--verified-soft)}
+.pill.attention{color:var(--attention);border-color:color-mix(in oklch,var(--attention) 45%,transparent);background:var(--attention-soft)}
+.pill.failed{color:var(--failed);border-color:color-mix(in oklch,var(--failed) 45%,transparent);background:var(--failed-soft)}
+.pill.claim{color:var(--claim);border-style:dashed}
+button{font:500 11.5px/1 var(--sans);padding:5px 9px;border:1px solid var(--hair);background:var(--raised);color:var(--fg);border-radius:4px;cursor:pointer}
+button:focus-visible,a:focus-visible,tr[data-path]:focus-visible{outline:2px solid var(--running);outline-offset:2px}
+button[aria-pressed="true"]{border-color:var(--running);color:var(--running)}
+nav.top{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;background:var(--panel);border:1px solid var(--hair);border-radius:6px;box-shadow:0 2px 8px color-mix(in oklch,var(--base) 70%,transparent)}
+nav.top .brand{font-weight:600;font-size:12.5px;color:var(--muted);margin-right:4px}
+nav.top a{color:var(--muted);text-decoration:none;font-weight:500;padding:4px 8px;border-radius:4px}
+nav.top a:hover{color:var(--fg);background:var(--raised)}
+nav.top a.here{color:var(--fg);background:var(--raised)}
+nav.top .picker{display:flex;align-items:center;gap:6px;margin-left:auto;min-width:0}
+nav.top select{font:12px var(--mono);padding:4px 6px;border:1px solid var(--hair);border-radius:4px;background:var(--raised);color:var(--fg);max-width:min(60vw,420px)}
+.strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:12px 14px}
+.strip .id{display:flex;align-items:center;gap:10px;min-width:0}
+.strip .right{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted)}
+.strip .right b{color:var(--fg);font-weight:500}
+.strip code{overflow-wrap:anywhere}
+.banner{display:grid;gap:6px;padding:10px 14px;border:1px solid color-mix(in oklch,var(--failed) 45%,transparent);background:var(--failed-soft);border-radius:6px}
+.banner h2{color:var(--failed)}
+.empty{padding:16px 14px;display:grid;gap:8px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.listfoot{justify-content:space-between;padding:9px 14px;border-top:1px solid var(--hair)}
+table{width:100%;border-collapse:collapse}
+.rail th{font:600 11px/1.4 var(--sans);letter-spacing:.03em;text-transform:uppercase;color:var(--muted);text-align:left;padding:6px 14px;border-bottom:1px solid var(--hair)}
+.rail th.num{text-align:right}
+.rail td{padding:8px 14px;border-bottom:1px solid var(--hair);vertical-align:middle}
+.rail tr:last-child td{border-bottom:0}
+.rail tbody tr{border-left:3px solid transparent;cursor:pointer}
+.rail tr.running{border-left-color:var(--running);background:color-mix(in oklch,var(--running-soft) 40%,transparent)}
+.rail tr.attention{border-left-color:var(--attention)}
+.rail tr.failed{border-left-color:var(--failed)}
+.rail tr.verified{border-left-color:var(--verified)}
+.rail tr.old td{color:var(--muted)}
+.rail td.title{max-width:0}
+.rail td.title .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rail td.title .s{color:var(--muted);font-size:11.5px}
+.rail td.state,.rail td.num,.rail td:first-child,.rail th:first-child{width:1%;white-space:nowrap}
+.rail .sep td{padding:6px 14px;font:600 11px/1.4 var(--sans);letter-spacing:.03em;text-transform:uppercase;color:var(--muted);background:var(--sunken);cursor:default}
+/* plan view */
+.plan{padding:14px;display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+.plan .control{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;align-items:baseline;padding:10px 12px;border:1px solid var(--hair);border-radius:6px;background:var(--sunken)}
+.plan .control dt{color:var(--muted);font-size:11.5px;margin:0;font-family:var(--mono)}
+.plan .control dd{margin:0;overflow-wrap:anywhere}
+.body{max-width:76ch;font-size:13.5px;line-height:1.55}
+.body h1{font-size:18px;margin:6px 0 4px}
+.body h2{font-size:14px;margin:18px 0 4px;padding-top:12px;border-top:1px solid var(--hair)}
+.body h3{font-size:13px;margin:12px 0 2px}
+.body h4,.body h5,.body h6{font-size:12.5px;margin:10px 0 2px}
+.body p,.body ul,.body ol,.body pre,.body table,.body blockquote{margin:6px 0}
+.body li{margin:2px 0}
+.body pre{background:var(--sunken);border:1px solid var(--hair);border-radius:4px;padding:8px 10px;overflow-x:auto;font-size:11.5px;line-height:1.5}
+.body code{background:var(--sunken);border:1px solid var(--hair);padding:0 4px;border-radius:3px;overflow-wrap:anywhere}
+.body pre code{background:none;border:0;padding:0}
+.body table{border:1px solid var(--hair);font-size:12.5px}
+.body th,.body td{border-bottom:1px solid var(--hair);padding:4px 8px;text-align:left;vertical-align:top}
+.body blockquote{border-left:3px solid var(--hair);padding-left:10px;color:var(--muted)}
+footer.note{color:var(--muted);font-size:11.5px;text-align:center;display:grid;gap:8px;justify-items:center}
+footer.note .theme{display:flex;gap:4px}
+[hidden]{display:none !important}
+@media (max-width:600px){
+  .rail thead{display:none}
+  .rail tbody tr{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;padding:10px 14px 10px 11px;border-bottom:1px solid var(--hair)}
+  .rail tbody tr.sep{display:block}
+  .rail td{padding:0;border:0}
+  .rail td.title{grid-column:2;max-width:none}
+  .rail td.title .t{white-space:normal}
+  .rail td.state,.rail td.num{grid-column:2;width:auto;white-space:normal;text-align:left;font-size:11.5px}
+  .rail td.num::before{content:attr(data-label) " ";color:var(--muted);font-family:var(--sans)}
+  .strip .right{margin-left:0}
+}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><section class="panel empty"><p class="muted">Loading plans…</p></section></div>
+<script>
+(function () {
+  'use strict';
+  var app = document.getElementById('app');
+  var state = {doc: null, showAll: false, plan: null, planDoc: null, error: null, batches: []};
+  function currentBatch() { var m = /[?&]batch=([^&]+)/.exec(location.search); return m ? decodeURIComponent(m[1]) : ''; }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function batchHref(id, path) { return (path || '/plans') + (id ? '?batch=' + encodeURIComponent(id) : ''); }
+  function renderNav() {
+    var list = state.batches || [], id = currentBatch();
+    var picker = '';
+    if (list.length > 1) {
+      var groups = {}, order = [];
+      list.forEach(function (b) { var g = b.group || ''; if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(b); });
+      var option = function (b) {
+        var name = b.group ? b.id.slice(b.group.length + 1) : b.id, d = b.updated ? new Date(b.updated * 1000) : null;
+        var when = d ? pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) : '';
+        return '<option value="' + h(b.id) + '"' + (b.id === id ? ' selected' : '') + '>' + h(name) + ' · ' + h((b.phase || '?').toLowerCase()) + (when ? ' · ' + h(when) : '') + '</option>';
+      };
+      picker = '<label class="picker"><span class="muted">run</span> <select data-batch aria-label="Choose a run">' + (id ? '' : '<option value="" selected disabled>newest</option>') +
+        order.map(function (g) { var o = groups[g].map(option).join(''); return g ? '<optgroup label="' + h(g) + '">' + o + '</optgroup>' : o; }).join('') + '</select></label>';
+    }
+    return '<nav class="top" aria-label="Sections"><span class="brand">coding loop</span>' +
+      '<a href="/runs">Runs' + (list.length ? ' <span class="muted">' + list.length + '</span>' : '') + '</a>' +
+      '<a href="' + batchHref(id, '/') + '">Monitor</a><a href="' + batchHref(id) + '" class="here">Plans</a>' + picker + '</nav>';
+  }
+
+  function h(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function when(epoch, now) {
+    if (typeof epoch !== 'number') return '<span class="muted">unknown</span>';
+    var d = new Date(epoch * 1000), age = now - epoch;
+    var abs = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    var rel;
+    if (age < 3600) rel = Math.max(1, Math.round(age / 60)) + ' min ago';
+    else if (age < 86400) rel = Math.round(age / 3600) + ' h ago';
+    else rel = Math.round(age / 86400) + ' d ago';
+    return '<span title="' + h(abs) + '">' + h(rel) + '</span> <span class="muted">' + h(abs) + '</span>';
+  }
+  function register(status) {
+    return {IN_PROGRESS: 'running', READY: 'attention', BLOCKED: 'failed', COMPLETE: 'verified', DRAFT: '', SUPERSEDED: 'claim'}[status] || '';
+  }
+  function plural(n, w) { return n + ' ' + w + (n === 1 ? '' : 's'); }
+
+  function batchQuery(prefix) {
+    var m = /[?&]batch=([^&]+)/.exec(location.search);
+    return m ? prefix + 'batch=' + m[1] : '';
+  }
+  function load() {
+    fetch('/api/batches', {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (b) { state.batches = b.batches || []; render(); }).catch(function () { /* nav still works without it */ });
+    fetch('/api/plans' + batchQuery('?'), {cache: 'no-store'}).then(function (r) { return r.json(); }).then(function (doc) {
+      state.doc = doc; state.error = null; route();
+    }).catch(function (e) { state.error = String(e); render(); });
+  }
+  function loadPlan(path) {
+    state.planDoc = null;
+    fetch('/api/plan?path=' + encodeURIComponent(path) + batchQuery('&'), {cache: 'no-store'}).then(function (r) {
+      return r.json().then(function (body) { return {ok: r.ok, body: body}; });
+    }).then(function (res) {
+      state.planDoc = res.ok ? res.body : {error: res.body.error || 'not found'};
+      render();
+    }).catch(function (e) { state.planDoc = {error: String(e)}; render(); });
+  }
+  function route() {
+    var m = /#plan=(.+)$/.exec(location.hash || '');
+    state.plan = m ? decodeURIComponent(m[1]) : null;
+    if (state.plan) loadPlan(state.plan); else render();
+    if (!state.plan) window.scrollTo(0, 0);
+  }
+
+  function renderStrip(doc) {
+    var counts = doc.counts || {total: 0, recent: 0};
+    var active = doc.active && doc.active !== 'NONE' ? '<a href="#plan=' + encodeURIComponent(doc.active) + '">' + h(doc.active.replace(/^docs\/plans\/tasks\//, '')) + '</a>' : '<b>none</b>';
+    return '<section class="panel strip" aria-label="Plans"><div class="id"><h1>Plans</h1><code class="mono">' + h(doc.checkout || '') + '</code></div>' +
+      '<div class="right"><span>active <b>' + active + '</b></span><span>total <b>' + counts.total + '</b></span>' +
+      '<span>changed in the last ' + doc.recent_days + ' days or executable <b>' + counts.recent + '</b></span>' +
+      '<span>times from <b>' + h(doc.time_source === 'git' ? 'git history' : 'file mtimes') + '</b></span></div></section>';
+  }
+
+  function row(p, now, old) {
+    var reg = register(p.status), cls = reg + (old ? ' old' : '');
+    var status = p.status ? '<span class="pill ' + reg + '">' + h(p.status) + '</span>' : '<span class="pill failed">no control block</span>';
+    var extra = [];
+    if (p.active) extra.push('<span class="pill running">active</span>');
+    if (!p.in_inbox) extra.push('<span class="pill attention" title="not listed in docs/plans/INBOX.md">not in inbox</span>');
+    if (p.errors && p.errors.length) extra.push('<span class="pill failed" title="' + h(p.errors.join('\n')) + '">' + plural(p.errors.length, 'error') + '</span>');
+    return '<tr class="' + cls + '" data-path="' + h(p.path) + '" tabindex="0" role="link" aria-label="Open ' + h(p.title) + '">' +
+      '<td><span class="dot ' + reg + '" aria-hidden="true"></span></td>' +
+      '<td class="title"><div class="t">' + h(p.title) + '</div><div class="s mono">' + h(p.id || p.path) + (p.is_task ? '' : ' · ' + h(p.path)) + '</div></td>' +
+      '<td class="state">' + status + ' ' + extra.join(' ') + '</td>' +
+      '<td class="state"><span class="mono">' + h(p.active_phase || '–') + '</span> <span class="muted">' + h(p.implementation_authority || '') + '</span></td>' +
+      '<td class="num" data-label="changed">' + when(p.updated, now) + '</td></tr>';
+  }
+
+  function renderList(doc) {
+    var now = doc.generated, recent = doc.plans.filter(function (p) { return p.recent; }), older = doc.plans.filter(function (p) { return !p.recent; });
+    var head = '<thead><tr><th></th><th>Plan</th><th>Status</th><th>Phase · authority</th><th class="num">Changed</th></tr></thead>';
+    var body = recent.map(function (p) { return row(p, now, false); }).join('');
+    if (!recent.length) body += '<tr class="sep"><td colspan="5">nothing changed in the last ' + doc.recent_days + ' days</td></tr>';
+    if (state.showAll && older.length) {
+      body += '<tr class="sep"><td colspan="5">older · ' + plural(older.length, 'plan') + '</td></tr>' + older.map(function (p) { return row(p, now, true); }).join('');
+    }
+    var toggle = older.length ? '<button type="button" data-toggle aria-pressed="' + state.showAll + '">' + (state.showAll ? 'show recent only' : 'show all ' + doc.plans.length) + '</button>' : '';
+    var foot = state.showAll && older.length ? '<div class="toolbar listfoot"><span class="muted">end of ' + plural(doc.plans.length, 'plan') + '</span>' + toggle + '</div>' : '';
+    return '<section class="panel" aria-label="Plan list"><header><h2>' + (state.showAll ? 'All plans' : 'Recent plans') + '</h2><div class="toolbar"><span class="muted">' +
+      recent.length + ' recent' + (older.length ? ' · ' + older.length + ' older' : '') + '</span>' + toggle + '</div></header>' +
+      '<table class="rail">' + head + '<tbody>' + body + '</tbody></table>' + foot + '</section>';
+  }
+
+  function renderPlan(doc) {
+    var pd = state.planDoc, back = '<button type="button" data-back>← all plans</button>';
+    if (!pd) return '<section class="panel plan"><div class="toolbar">' + back + '<span class="muted">loading ' + h(state.plan) + '…</span></div></section>';
+    if (pd.error) return '<section class="panel plan"><div class="toolbar">' + back + '</div><div class="banner"><h2>Cannot show ' + h(state.plan) + '</h2><div>' + h(pd.error) + '</div></div></section>';
+    var meta = (doc.plans || []).filter(function (p) { return p.path === pd.path; })[0];
+    var control = Object.keys(pd.control || {}).map(function (k) { return '<dt>' + h(k) + '</dt><dd>' + h(pd.control[k]) + '</dd>'; }).join('');
+    var status = pd.control && pd.control.status ? '<span class="pill ' + register(pd.control.status) + '">' + h(pd.control.status) + '</span>' : '';
+    return '<section class="panel" aria-label="Plan"><header><div class="toolbar">' + back + '<h2>' + h(pd.title) + '</h2>' + status + (meta && meta.active ? '<span class="pill running">active</span>' : '') + '</div>' +
+      '<span class="muted mono">' + h(pd.path) + (meta && meta.updated ? ' · changed ' + when(meta.updated, doc.generated) : '') + '</span></header>' +
+      '<div class="plan">' + (control ? '<dl class="control">' + control + '</dl>' : '<span class="muted">No control block.</span>') +
+      '<div class="body">' + pd.html + '</div></div></section>';
+  }
+
+  function renderFooter() {
+    var theme = currentTheme();
+    return '<footer class="note"><div>Read-only. Plans are read from the checkout on every load; nothing is written.</div>' +
+      '<div class="theme" role="group" aria-label="Theme">' + ['auto', 'light', 'dark'].map(function (t) {
+        return '<button type="button" data-theme-pick="' + t + '" aria-pressed="' + (theme === t) + '">' + t + '</button>';
+      }).join('') + '</div></footer>';
+  }
+
+  function render() {
+    var doc = state.doc, out = [renderNav()];
+    if (state.error && !doc) {
+      out.push('<section class="banner"><h2>Cannot reach the monitor server</h2><div>' + h(state.error) + '</div></section>', renderFooter());
+      app.innerHTML = out.join(''); return;
+    }
+    if (!doc) { app.innerHTML = out.join('') + '<section class="panel empty"><p class="muted">Loading plans…</p></section>'; return; }
+    if (doc.errors && doc.errors.length) {
+      out.push('<section class="banner" aria-label="Lifecycle errors"><h2>Lifecycle problems</h2>' + doc.errors.map(function (e) {
+        return '<div><span class="mono">' + h(e.file) + '</span> <span class="muted">' + h(e.message) + '</span></div>'; }).join('') + '</section>');
+    }
+    if (!doc.checkout) {
+      out.push('<section class="panel empty"><p><b>No checkout to read plans from.</b></p><p class="muted">Start the server with <code>--checkout /path/to/repo</code>, or point <code>--directory</code> at a batch whose manifest names one.</p></section>');
+    } else if (state.plan) {
+      out.push(renderStrip(doc), renderPlan(doc));
+    } else {
+      out.push(renderStrip(doc), renderList(doc));
+    }
+    out.push(renderFooter());
+    app.innerHTML = out.join('');
+    document.title = state.plan && state.planDoc && state.planDoc.title ? state.planDoc.title + ' · Plan Board' : 'Plan Board';
+  }
+
+  function currentTheme() {
+    var t = document.documentElement.getAttribute('data-theme');
+    return t === 'light' || t === 'dark' ? t : 'auto';
+  }
+  function applyTheme(t) {
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    else document.documentElement.removeAttribute('data-theme');
+    try { if (t === 'auto') localStorage.removeItem('monitor-theme'); else localStorage.setItem('monitor-theme', t); } catch (e) { /* storage blocked */ }
+  }
+  try { applyTheme(localStorage.getItem('monitor-theme') || 'auto'); } catch (e) { /* storage blocked */ }
+  try { state.showAll = localStorage.getItem('plans-show-all') === '1'; } catch (e) { /* storage blocked */ }
+
+  app.addEventListener('click', function (event) {
+    var target = event.target.closest('button, tr[data-path], a');
+    if (!target) return;
+    if (target.tagName === 'A') return; // hash links route themselves
+    if (target.hasAttribute('data-toggle')) {
+      state.showAll = !state.showAll;
+      try { localStorage.setItem('plans-show-all', state.showAll ? '1' : '0'); } catch (e) { /* storage blocked */ }
+      render();
+      if (!state.showAll) window.scrollTo(0, 0);
+      return;
+    }
+    if (target.hasAttribute('data-back')) { location.hash = ''; return; }
+    if (target.hasAttribute('data-theme-pick')) { applyTheme(target.getAttribute('data-theme-pick')); render(); return; }
+    if (target.hasAttribute('data-path')) { location.hash = 'plan=' + encodeURIComponent(target.getAttribute('data-path')); }
+  });
+  app.addEventListener('keydown', function (event) {
+    if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('tr[data-path]')) {
+      event.preventDefault();
+      location.hash = 'plan=' + encodeURIComponent(event.target.getAttribute('data-path'));
+    }
+  });
+  app.addEventListener('change', function (event) {
+    if (event.target.matches('select[data-batch]')) location.href = batchHref(event.target.value);
+  });
+  window.addEventListener('hashchange', route);
+  load();
+})();
+</script>
+</body>
+</html>

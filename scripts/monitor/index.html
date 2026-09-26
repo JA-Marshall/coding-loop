@@ -1,0 +1,1038 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Batch Board</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="Read-only monitor for one running coding-loop batch: liveness, budgets, queue, packet evidence and the stop reason.">
+<style>
+:root{
+  color-scheme:light;
+  --base:oklch(0.965 0.004 264);--panel:oklch(0.995 0.002 264);--raised:oklch(0.935 0.005 264);--sunken:oklch(0.945 0.004 264);
+  --hair:oklch(0.86 0.008 264);--fg:oklch(0.22 0.01 264);--muted:oklch(0.48 0.012 264);
+  --running:oklch(0.5 0.11 232);--running-soft:oklch(0.92 0.03 232);
+  --attention:oklch(0.58 0.14 78);--attention-soft:oklch(0.94 0.05 78);
+  --verified:oklch(0.5 0.14 155);--verified-soft:oklch(0.93 0.05 155);
+  --failed:oklch(0.53 0.18 25);--failed-soft:oklch(0.94 0.05 25);
+  --claim:oklch(0.55 0.012 264);--diff-add:oklch(0.5 0.07 152);--diff-del:oklch(0.5 0.08 32);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --base:oklch(0.168 0.005 264);--panel:oklch(0.203 0.006 264);--raised:oklch(0.243 0.006 264);--sunken:oklch(0.145 0.005 264);
+  --hair:oklch(0.315 0.008 264);--fg:oklch(0.935 0.004 264);--muted:oklch(0.715 0.009 264);
+  --running:oklch(0.755 0.098 232);--running-soft:oklch(0.3 0.045 232);
+  --attention:oklch(0.8 0.125 78);--attention-soft:oklch(0.33 0.055 78);
+  --verified:oklch(0.755 0.135 155);--verified-soft:oklch(0.3 0.05 155);
+  --failed:oklch(0.68 0.165 25);--failed-soft:oklch(0.31 0.07 25);
+  --claim:oklch(0.63 0.012 264);--diff-add:oklch(0.82 0.055 152);--diff-del:oklch(0.79 0.055 32);
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --base:oklch(0.168 0.005 264);--panel:oklch(0.203 0.006 264);--raised:oklch(0.243 0.006 264);--sunken:oklch(0.145 0.005 264);
+  --hair:oklch(0.315 0.008 264);--fg:oklch(0.935 0.004 264);--muted:oklch(0.715 0.009 264);
+  --running:oklch(0.755 0.098 232);--running-soft:oklch(0.3 0.045 232);
+  --attention:oklch(0.8 0.125 78);--attention-soft:oklch(0.33 0.055 78);
+  --verified:oklch(0.755 0.135 155);--verified-soft:oklch(0.3 0.05 155);
+  --failed:oklch(0.68 0.165 25);--failed-soft:oklch(0.31 0.07 25);
+  --claim:oklch(0.63 0.012 264);--diff-add:oklch(0.82 0.055 152);--diff-del:oklch(0.79 0.055 32);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--base);color:var(--fg);font:13px/1.45 var(--sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 16px 48px;display:grid;grid-template-columns:minmax(0,1fr);gap:14px}
+.wrap>*,.tape>*,.detail>*,.two>*,.card>*,.check>*{min-width:0}
+.mono,code,.num{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+.num{text-align:right}
+h1,h2,h3{margin:0;font-weight:600}
+h1{font-size:15px}h2{font-size:12.5px}h3{font-size:12px}
+p{margin:0}
+.muted{color:var(--muted)}
+.unknown{color:var(--attention);font-family:var(--mono);font-size:12px}
+.panel{background:var(--panel);border:1px solid var(--hair);border-radius:6px}
+.panel>header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px;padding:9px 14px;border-bottom:1px solid var(--hair)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);vertical-align:middle;flex:none}
+.dot.running{background:var(--running);animation:pulse 2.5s ease-in-out infinite}
+.dot.verified{background:var(--verified)}.dot.attention{background:var(--attention)}.dot.failed{background:var(--failed)}
+@keyframes pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot.running{animation:none}}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:1px 8px;border-radius:999px;border:1px solid var(--hair);font:11px/1.6 var(--sans);color:var(--muted);background:var(--raised);white-space:nowrap}
+.pill.running{color:var(--running);border-color:color-mix(in oklch,var(--running) 40%,transparent);background:var(--running-soft)}
+.pill.verified{color:var(--verified);border-color:color-mix(in oklch,var(--verified) 40%,transparent);background:var(--verified-soft)}
+.pill.attention{color:var(--attention);border-color:color-mix(in oklch,var(--attention) 45%,transparent);background:var(--attention-soft)}
+.pill.failed{color:var(--failed);border-color:color-mix(in oklch,var(--failed) 45%,transparent);background:var(--failed-soft)}
+
+/* 0 stop card, errors, empty states */
+.needsyou{border-color:color-mix(in oklch,var(--attention) 60%,transparent)}
+.needsyou>header{background:var(--attention-soft);border-bottom-color:color-mix(in oklch,var(--attention) 40%,transparent)}
+.needsyou>header h2{color:var(--attention)}
+.needsyou .body{padding:12px 14px;font-size:14px}
+.needsyou a{color:var(--attention);font-weight:600}
+.stopcard{border-color:color-mix(in oklch,var(--failed) 55%,transparent)}
+.stopcard>header{background:var(--failed-soft);border-bottom-color:color-mix(in oklch,var(--failed) 35%,transparent)}
+.stopcard>header h2{color:var(--failed)}
+.stopcard .body{display:grid;gap:10px;padding:12px 14px}
+.stopcard .reason{font-size:14px;font-weight:600;overflow-wrap:anywhere}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;align-items:baseline}
+.kv dt{color:var(--muted);font-size:11.5px;margin:0}
+.kv dd{margin:0}
+.banner{display:grid;gap:6px;padding:10px 14px;border:1px solid color-mix(in oklch,var(--failed) 45%,transparent);background:var(--failed-soft);border-radius:6px}
+.banner h2{color:var(--failed)}
+.banner .file{font-family:var(--mono);font-size:12px}
+.empty{padding:16px 14px;display:grid;gap:8px}
+
+/* 1 header strip */
+.strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:12px 14px}
+.strip .id{display:flex;align-items:center;gap:10px;min-width:0}
+.strip .id .repo{overflow-wrap:anywhere}
+.strip .phase{display:flex;align-items:center;gap:8px}
+.strip .right{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted)}
+.strip .right b{color:var(--fg);font-weight:500}
+.strip .right b.attention{color:var(--attention)}
+.strip .stop{flex-basis:100%;color:var(--attention);font-weight:500}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 14px}
+.controls button.stop{background:var(--failed);color:oklch(0.99 0 0);border-color:var(--failed);font-weight:600}
+.controls button[disabled]{opacity:.5;cursor:default}
+.controls select{font:12px var(--mono);padding:3px 6px;border:1px solid var(--hair);border-radius:4px;background:var(--raised);color:var(--fg)}
+nav.top{position:sticky;top:0;z-index:3;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 12px;background:var(--panel);border:1px solid var(--hair);border-radius:6px;box-shadow:0 2px 8px color-mix(in oklch,var(--base) 70%,transparent)}
+nav.top .brand{font-weight:600;font-size:12.5px;color:var(--muted);margin-right:4px}
+nav.top a{color:var(--muted);text-decoration:none;font-weight:500;padding:4px 8px;border-radius:4px}
+nav.top a:hover{color:var(--fg);background:var(--raised)}
+nav.top a.here{color:var(--fg);background:var(--raised)}
+nav.top .picker{display:flex;align-items:center;gap:6px;margin-left:auto;min-width:0}
+nav.top select{font:12px var(--mono);padding:4px 6px;border:1px solid var(--hair);border-radius:4px;background:var(--raised);color:var(--fg);max-width:min(60vw,420px)}
+.runs td .reason{color:var(--muted);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.runs td.title{max-width:0}
+.runs tbody tr{cursor:pointer}
+.crumb{font-size:11.5px;color:var(--muted)}
+
+/* 2 meters */
+.meters{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--hair);border:1px solid var(--hair);border-radius:6px;overflow:hidden}
+.meter{background:var(--panel);padding:10px 14px 12px;display:grid;gap:6px;align-content:start}
+.meter .lab{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.meter .lab span:first-child{font-weight:600;font-size:12px}
+.meter .lab .num{white-space:nowrap}
+.bar{height:4px;background:var(--raised);border-radius:2px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--running);border-radius:2px}
+.bar.attention i{background:var(--attention)}
+.bar.failed i{background:var(--failed)}
+.meter .sub{color:var(--muted);font-size:11.5px}
+
+/* 2b tape */
+.tape{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;padding:12px 14px;margin:0}
+.tape>header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 12px;padding:0 0 8px;border-bottom:1px solid var(--hair)}
+.tape svg{width:100%;height:auto;display:block}
+.tape .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:11.5px;color:var(--muted)}
+.legend i{display:inline-block;width:14px;height:8px;vertical-align:middle;margin-right:6px;border-radius:1px}
+.tape figcaption{font-size:11.5px;color:var(--muted)}
+
+/* 3 rail */
+table{width:100%;border-collapse:collapse}
+.rail th{font:600 11px/1.4 var(--sans);letter-spacing:.03em;text-transform:uppercase;color:var(--muted);text-align:left;padding:6px 14px;border-bottom:1px solid var(--hair)}
+.rail th.num{text-align:right}
+.rail td{padding:8px 14px;border-bottom:1px solid var(--hair);vertical-align:middle}
+.rail tr:last-child td{border-bottom:0}
+.rail tbody tr{border-left:3px solid transparent}
+.rail tbody tr[data-id]{cursor:pointer}
+.rail tbody tr[data-id]:focus-visible{outline:2px solid var(--running);outline-offset:-2px}
+.rail tr.running{border-left-color:var(--running);background:color-mix(in oklch,var(--running-soft) 40%,transparent)}
+.rail tr.verified{border-left-color:var(--verified)}
+.rail tr.failed{border-left-color:var(--failed);background:color-mix(in oklch,var(--failed-soft) 40%,transparent)}
+.rail tr.selected td.title .t{text-decoration:underline;text-decoration-color:var(--hair);text-underline-offset:3px}
+.rail td.title{max-width:0}
+.rail th.num,.rail td.num,.rail td.state,.rail td:first-child,.rail th:first-child{width:1%;white-space:nowrap}
+.rail td.title .t{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rail td.title .s{color:var(--muted);font-size:11.5px}
+.rail a{color:var(--verified);text-decoration:none}
+.rail .q{color:var(--muted)}
+
+/* 4 detail */
+.detail{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;padding:14px}
+.stages{display:grid;grid-template-columns:minmax(0,1fr);gap:6px}
+.stage{display:flex;flex-wrap:wrap;align-items:center;gap:0}
+.stage span{font:500 11px/1 var(--mono);letter-spacing:.04em;padding:5px 9px;border:1px solid var(--hair);color:var(--muted);background:var(--raised);position:relative}
+.stage span+span{margin-left:-1px}
+.stage span:first-of-type{border-radius:4px 0 0 4px}.stage span:last-child{border-radius:0 4px 4px 0}
+.stage span.done{color:var(--verified);border-color:color-mix(in oklch,var(--verified) 40%,transparent);background:var(--verified-soft)}
+.stage span.now{color:var(--running);border-color:var(--running);background:var(--running-soft);z-index:1}
+.stage span.failed{color:var(--failed);border-color:var(--failed);background:var(--failed-soft);z-index:1}
+.stage .lab{font:11px/1 var(--sans);letter-spacing:0;border:0;background:none;color:var(--muted);padding:5px 8px 5px 0;width:52px;border-radius:0}
+.calls td{padding:5px 8px;border-bottom:1px solid var(--hair);vertical-align:top}
+.calls tr:last-child td{border-bottom:0}
+.calls td:first-child{width:24px;color:var(--muted)}
+.calls tr.head td{font:600 10.5px/1.4 var(--sans);letter-spacing:.03em;text-transform:uppercase;color:var(--muted);padding-top:0}
+.calls td.num{white-space:nowrap}
+.claim ul{margin:0;padding-left:18px}.claim li{margin:2px 0}.claim p{margin:0 0 6px}.claim code{font-size:11.5px}
+.reviewtext{max-height:480px;overflow-y:auto}.reviewtext ul{margin:0;padding-left:18px}.reviewtext li{margin:2px 0}.reviewtext p{margin:0 0 6px}.reviewtext code{font-size:11.5px}
+.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.card{border:1px solid var(--hair);border-radius:6px;background:var(--panel);display:grid;grid-template-rows:auto 1fr}
+.card>header{padding:8px 12px;border-bottom:1px solid var(--hair);display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 8px}
+.card>header h3{white-space:nowrap}
+.claim .text{max-height:230px;overflow:hidden;position:relative}
+.claim .text.open{max-height:none}
+.claim .text:not(.open)::after{content:"";position:absolute;left:0;right:0;bottom:0;height:40px;background:linear-gradient(transparent,var(--panel))}
+.card>div{padding:10px 12px;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;align-content:start}
+.card.claim{border-style:dashed;color:var(--claim)}
+.card.claim h3{color:var(--claim)}
+.check{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 10px;align-items:baseline}
+.check .digest{grid-column:1/-1;display:grid;gap:4px}
+.check .digest .finding{padding:6px 8px;font-size:12px}
+.check .log{grid-column:1/-1;background:var(--sunken);border:1px solid var(--hair);border-radius:4px;padding:8px 10px;white-space:pre;overflow-x:auto;font-family:var(--mono);font-size:11.5px;line-height:1.5;color:var(--muted);max-height:320px;overflow-y:auto}
+.finding{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start;padding:8px 10px;border-radius:4px;border:1px solid var(--hair)}
+.finding.blocking{border-color:color-mix(in oklch,var(--failed) 45%,transparent);background:var(--failed-soft)}
+.finding .tag{font:600 10.5px/1.6 var(--sans);letter-spacing:.03em;text-transform:uppercase;white-space:nowrap}
+.finding.blocking .tag{color:var(--failed)}
+.finding .tag.note{color:var(--muted)}
+.finding .where{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.finding>span{min-width:0;overflow-wrap:anywhere}
+.check .digest{min-width:0}
+.path{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.path code{background:var(--sunken);border:1px solid var(--hair);padding:2px 6px;border-radius:3px;overflow-wrap:anywhere}
+button{font:500 11.5px/1 var(--sans);padding:5px 9px;border:1px solid var(--hair);background:var(--raised);color:var(--fg);border-radius:4px;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid var(--running);outline-offset:2px}
+button[aria-pressed="true"]{border-color:var(--running);color:var(--running)}
+.add{color:var(--diff-add)}.del{color:var(--diff-del)}
+footer.note{color:var(--muted);font-size:11.5px;text-align:center;display:grid;gap:8px;justify-items:center}
+footer.note .theme{display:flex;gap:4px}
+footer.note a{color:var(--running)}
+.offline{position:sticky;top:0;z-index:2;padding:8px 14px;border-radius:6px;border:1px solid color-mix(in oklch,var(--attention) 45%,transparent);background:var(--attention-soft);color:var(--attention)}
+[hidden]{display:none !important}
+@media (max-width:760px){
+  .meters{grid-template-columns:1fr 1fr}
+  .two{grid-template-columns:minmax(0,1fr)}
+}
+@media (max-width:600px){
+  .meters{grid-template-columns:1fr}
+  .rail thead{display:none}
+  .rail tbody tr{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;padding:10px 14px 10px 11px;border-bottom:1px solid var(--hair)}
+  .rail tbody tr:last-child{border-bottom:0}
+  .rail td{padding:0;border:0}
+  .rail td.title{grid-column:2;max-width:none}
+  .rail td.title .t{white-space:normal}
+  .runs td .reason{white-space:normal;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  .rail td.state{grid-column:2}
+  .rail td.num,.rail td.state{width:auto;white-space:normal}
+  .rail td.num{grid-column:2;text-align:left;font-size:11.5px}
+  .rail td.num::before{content:attr(data-label) " ";color:var(--muted);font-family:var(--sans)}
+  .tape .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;min-width:0;max-width:100%}
+  .calls tr.head{display:none}
+  .calls tr{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;padding:6px 0;border-bottom:1px solid var(--hair)}
+  .calls tr:last-child{border-bottom:0}
+  .calls td{display:block;padding:0;border:0;width:auto}
+  .calls td:first-child{width:auto}
+  .calls td.num{text-align:left;white-space:normal}
+  .calls td.num>div{display:inline}
+  .calls td.num>div::before{content:" · "}
+  .calls td:last-child{flex-basis:100%}
+  .tape svg{min-width:640px}
+  .strip .right{margin-left:0}
+}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <section class="panel empty" aria-live="polite"><p class="muted">Loading the batch board…</p></section>
+</div>
+<script>
+(function () {
+  'use strict';
+  var POLL_MS = 3000;
+  var app = document.getElementById('app');
+  var state = {raw: '', doc: null, selected: null, openLogs: {}, logs: {}, offline: null, claimOpen: false};
+  var PACKET_STAGES = ['IMPLEMENT', 'APPLYING', 'CHECKS', 'REVIEW', 'LOCAL_REVIEWED'];
+  var BATCH_STAGES = ['COMMIT', 'PUSH', 'PR', 'CI', 'MERGE'];
+  var START_COMMAND = 'python -m scripts.coordination.service start <manifest.json> --directory <evidence-dir>';
+
+  // ---------------------------------------------------------------- format
+  function h(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+    });
+  }
+  function unknown() { return '<span class="unknown">unknown</span>'; }
+  function mini(text) {
+    // The worker's summary is Markdown-ish: bold, inline code, "- " bullets. Escape first, then mark up.
+    var lines = h(text).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>').split(/\n/);
+    var out = [], list = [];
+    var flush = function () { if (list.length) { out.push('<ul>' + list.map(function (l) { return '<li>' + l + '</li>'; }).join('') + '</ul>'); list = []; } };
+    lines.forEach(function (line) {
+      var m = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (m) { list.push(m[1]); return; }
+      flush();
+      if (line.trim()) out.push('<p>' + line + '</p>');
+    });
+    flush();
+    return out.join('');
+  }
+  function num(value) {
+    if (typeof value !== 'number' || !isFinite(value)) return unknown();
+    return h(Math.round(value).toLocaleString('en-US'));
+  }
+  function dur(seconds, short) {
+    if (typeof seconds !== 'number' || !isFinite(seconds)) return unknown();
+    seconds = Math.max(0, Math.round(seconds));
+    var hours = Math.floor(seconds / 3600), mins = Math.floor((seconds % 3600) / 60), secs = seconds % 60;
+    if (hours) return hours + ' h ' + mins + ' m';
+    if (mins) return short ? mins + ' m' : mins + ' m ' + secs + ' s';
+    return secs + ' s';
+  }
+  function ago(seconds) {
+    if (typeof seconds !== 'number' || !isFinite(seconds)) return 'unknown';
+    seconds = Math.max(0, Math.round(seconds));
+    if (seconds < 60) return seconds + ' s ago';
+    if (seconds < 3600) return Math.round(seconds / 60) + ' min ago';
+    var hours = Math.floor(seconds / 3600), mins = Math.round((seconds % 3600) / 60);
+    return hours + ' h ' + mins + ' min ago';
+  }
+  function clock(epoch) {
+    if (typeof epoch !== 'number' || !isFinite(epoch)) return '?';
+    var d = new Date(epoch * 1000);
+    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function dayOf(epoch) {
+    var d = new Date(epoch * 1000);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+
+  // ---------------------------------------------------------------- data
+  function currentBatch() {
+    var m = /[?&]batch=([^&]+)/.exec(location.search);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function fetchState() {
+    var q = currentBatch() ? '?batch=' + encodeURIComponent(currentBatch()) : '';
+    fetch('/api/state' + q, {cache: 'no-store'}).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.text();
+    }).then(function (text) {
+      state.offline = null;
+      if (text === state.raw) { paintOffline(); return; }
+      state.raw = text;
+      state.doc = JSON.parse(text);
+      render();
+    }).catch(function (error) {
+      state.offline = error && error.message ? error.message : String(error);
+      if (!state.doc) render(); else paintOffline();
+    });
+  }
+  function fetchLog(path) {
+    if (state.logs[path]) return;
+    state.logs[path] = {loading: true};
+    fetch('/api/log?path=' + encodeURIComponent(path), {cache: 'no-store'}).then(function (response) {
+      return response.json().then(function (body) { return {ok: response.ok, body: body}; });
+    }).then(function (result) {
+      state.logs[path] = result.ok ? result.body : {error: result.body.error || 'refused'};
+      render();
+    }).catch(function (error) {
+      state.logs[path] = {error: String(error)};
+      render();
+    });
+  }
+  function copyText(text, button) {
+    var done = function () { button.textContent = 'copied'; setTimeout(function () { button.textContent = 'copy path'; }, 1200); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, done);
+    else { window.prompt('Copy this path', text); }
+  }
+
+  // ---------------------------------------------------------------- pieces
+  function pickSelected(doc) {
+    var ids = doc.packets.map(function (p) { return p.id; });
+    var wanted = packetFromHash();
+    if (wanted && ids.indexOf(wanted) >= 0 && doc.packets[ids.indexOf(wanted)].status !== 'queued') return wanted;
+    if (state.selected && ids.indexOf(state.selected) >= 0) {
+      var current = doc.packets[ids.indexOf(state.selected)];
+      if (current.status !== 'queued') return state.selected;
+    }
+    var order = ['running', 'stopped', 'reviewed', 'merged'];
+    for (var i = 0; i < order.length; i++) {
+      var found = doc.packets.filter(function (p) { return p.status === order[i]; });
+      if (found.length) return found[found.length - 1].id;
+    }
+    return null;
+  }
+
+  function registerFor(packet) {
+    return {merged: 'verified', reviewed: 'verified', running: 'running', stopped: 'failed', queued: ''}[packet.status] || '';
+  }
+
+  function renderErrors(doc) {
+    if (!doc.errors || !doc.errors.length) return '';
+    return '<section class="banner" aria-label="Unreadable evidence"><h2>Unreadable evidence</h2>' +
+      doc.errors.map(function (e) { return '<div><span class="file">' + h(e.file) + '</span> <span class="muted">' + h(e.message) + '</span></div>'; }).join('') +
+      '</section>';
+  }
+
+  function renderEmpty(doc) {
+    if (doc.empty === 'missing') {
+      return '<section class="panel empty" aria-label="No evidence"><p>No evidence directory at <code>' + h(doc.directory) + '</code>. Nothing has been launched there.</p>' +
+        '<p class="muted">Start a batch with:</p><code class="mono">' + h(START_COMMAND) + '</code></section>';
+    }
+    if (doc.empty === 'preflight') {
+      return '<section class="panel empty" aria-label="Preflight only"><p><b>Preflight only. Nothing launched.</b></p>' +
+        '<p class="muted"><code>' + h(doc.directory) + '</code> holds no <code>state.json</code>, and neither does any folder inside it. Your batches live at <code>batches/&lt;id&gt;/run</code>; point <code>--directory</code> at <code>batches/</code> to get a picker for all of them.</p></section>';
+    }
+    if (!doc.batch) {
+      return '<section class="panel empty"><p class="muted">The checkpoint could not be read. The parser message is above.</p></section>';
+    }
+    return '';
+  }
+
+  function post(path, body) {
+    var q = currentBatch() ? '?batch=' + encodeURIComponent(currentBatch()) : '';
+    return fetch(path + q, {method: 'POST', headers: {'X-Requested-With': 'monitor', 'Content-Type': 'application/json'}, body: JSON.stringify(body || {})})
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }); });
+  }
+  function renderControls(doc) {
+    var b = doc.batch, c = doc.control;
+    if (!c) return '';
+    var live = b.phase !== 'STOPPED' && b.phase !== 'COMPLETE' && b.phase !== 'LOCAL_REVIEWED' && !b.abandoned;
+    var items = [];
+    if (c.stop) items.push('<span class="pill attention">STOP file present</span><button type="button" data-act="clear">clear STOP</button>');
+    else if (live || (c.phases && c.locked)) items.push('<button type="button" class="stop" data-act="stop">Stop</button>');
+    if (c.phases && c.script) {
+      var ids = doc.packets.map(function (p) { return p.id.replace(/^phase-/, ''); });
+      var opts = ids.map(function (id) { return '<option value="' + h(id) + '">' + h(id) + '</option>'; }).join('');
+      var busy = c.locked || c.stop;
+      items.push('<span class="muted">' + (c.locked ? 'a loop is running' : 'idle') + '</span>');
+      items.push('<button type="button" data-act="run"' + (busy ? ' disabled' : '') + '>Run remaining phases</button>');
+      items.push('<label class="muted">review <select data-phase-pick class="mono">' + opts + '</select></label><button type="button" data-act="review"' + (busy ? ' disabled' : '') + '>Review</button><button type="button" data-act="correct"' + (busy ? ' disabled' : '') + '>Correct</button>');
+    }
+    if (!items.length) return '';
+    return '<section class="panel controls" aria-label="Controls"><span class="muted">controls</span>' + items.join('') + '<span id="control-msg" class="muted"></span></section>';
+  }
+
+  function renderNeedsYou(batch) {
+    var n = batch.needs_you;
+    if (!n) return '';
+    var link = n.pr && n.pr.url ? ' <a href="' + h(n.pr.url) + '" target="_blank" rel="noopener">PR #' + n.pr.number + '</a>' : '';
+    return '<section class="panel needsyou" aria-label="Waiting for you"><header><h2>Waiting for you</h2><span class="pill attention">needs a decision</span></header>' +
+      '<div class="body"><p>' + h(n.text) + link + '</p></div></section>';
+  }
+
+  function renderStopCard(batch) {
+    if (batch.phase !== 'STOPPED') return '';
+    return '<section class="panel stopcard" aria-label="Stopped">' +
+      '<header><h2>Stopped' + (batch.stopped_phase ? ' in ' + h(batch.stopped_phase) : '') + '</h2><span class="pill failed">STOPPED</span></header>' +
+      '<div class="body"><p class="reason">' + h(batch.reason || '(no reason recorded)') + '</p>' +
+      '<dl class="kv"><dt>Stopped in</dt><dd><span class="mono">' + h(batch.stopped_phase || 'unknown') + '</span></dd>' +
+      '<dt>Stop file</dt><dd>' + (batch.stop_requested ? 'present, the operator asked for this' + (batch.mode === 'phases' ? ' (remove it before the next run)' : '') : 'absent, the loop stopped on its own') + '</dd>' +
+      '<dt>Evidence</dt><dd class="path"><code>' + h(batch.evidence_dir) + '</code><button type="button" data-copy="' + h(batch.evidence_dir) + '">copy path</button></dd></dl>' +
+      '</div></section>';
+  }
+
+  function packetFromHash() {
+    var m = /[#&]packet=([^&]+)/.exec(location.hash || '');
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+  function onRunsPage() { return location.pathname === '/runs'; }
+  function batchHref(id, path) { return (path || '/') + (id ? '?batch=' + encodeURIComponent(id) : ''); }
+  function registerForPhase(b, now) {
+    if (b.phase === 'STOPPED') return 'failed';
+    if (b.phase === 'COMPLETE' || b.phase === 'LOCAL_REVIEWED') return 'verified';
+    if (b.deadline != null && now > b.deadline) return 'attention';
+    return 'running';
+  }
+  function renderNav(doc) {
+    var list = (doc && doc.batches) || [], id = onRunsPage() ? '' : ((doc && doc.batch_id) || currentBatch());
+    var here = onRunsPage() ? 'runs' : 'monitor';
+    return '<nav class="top" aria-label="Sections"><span class="brand">coding loop</span>' +
+      '<a href="/runs" class="' + (here === 'runs' ? 'here' : '') + '">Runs' + (list.length ? ' <span class="muted">' + list.length + '</span>' : '') + '</a>' +
+      '<a href="' + batchHref(id) + '" class="' + (here === 'monitor' ? 'here' : '') + '">Monitor</a>' +
+      '<a href="' + batchHref(id, '/plans') + '">Plans</a>' +
+      batchPicker(doc || {}) + '</nav>';
+  }
+  function renderRuns(doc) {
+    var list = doc.batches || [], now = doc.generated;
+    if (!list.length) return '<section class="panel empty"><p><b>No runs found under</b> <code>' + h(doc.root || doc.directory) + '</code>.</p></section>';
+    var rows = list.map(function (b) {
+      var reg = registerForPhase(b, now), name = b.group && b.id !== b.group ? b.id.slice(b.group.length + 1) : b.id;
+      var progress = b.total != null ? (b.merged + ' of ' + b.total + (b.kind === 'batch' ? ' merged' : ' reviewed')) : '';
+      var phase = b.phase === 'STOPPED' && b.stopped_phase ? 'STOPPED in ' + b.stopped_phase : (b.phase || '?');
+      var pillClass = reg === 'attention' ? 'attention' : reg;
+      return '<tr class="' + reg + '" data-run="' + h(b.id) + '" tabindex="0" role="link">' +
+        '<td><span class="dot ' + reg + '" aria-hidden="true"></span></td>' +
+        '<td class="title"><div class="t">' + h(name) + ' <span class="muted">' + h(b.group || '') + '</span></div>' + (b.reason ? '<div class="reason" title="' + h(b.reason) + '">' + h(b.reason) + '</div>' : '') + '</td>' +
+        '<td class="state"><span class="pill ' + pillClass + '">' + h(phase) + '</span>' + (reg === 'attention' ? ' <span class="muted">deadline passed</span>' : '') + '</td>' +
+        '<td class="state muted">' + h(progress) + '</td>' +
+        '<td class="num" data-label="calls">' + (b.calls != null ? num(b.calls) : '<span class="muted">–</span>') + '</td>' +
+        '<td class="num" data-label="tokens">' + (b.tokens != null ? num(b.tokens) : '<span class="muted">–</span>') + '</td>' +
+        '<td class="num" data-label="last checkpoint">' + (b.updated != null ? '<span title="' + h(new Date(b.updated * 1000).toLocaleString()) + '">' + h(ago(now - b.updated)) + '</span>' : '?') + '</td></tr>';
+    }).join('');
+    return '<section class="panel" aria-label="Runs"><header><h2>Runs</h2><span class="muted">' + plural(list.length, 'run') + ' under <span class="mono">' + h(doc.root || doc.directory) + '</span> · newest first</span></header>' +
+      '<table class="rail runs"><thead><tr><th></th><th>Run</th><th>Phase</th><th>Progress</th><th class="num">Calls</th><th class="num">Tokens</th><th class="num">Checkpoint</th></tr></thead><tbody>' + rows + '</tbody></table></section>';
+  }
+
+  function batchPicker(doc) {
+    var list = doc.batches || [];
+    if (list.length < 2) return '';
+    var groups = {}, order = [];
+    list.forEach(function (b) { var g = b.group || ''; if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(b); });
+    var option = function (b) {
+      var tag = b.phase === 'STOPPED' ? 'stopped' : b.phase === 'COMPLETE' ? 'complete' : (b.phase || '?').toLowerCase();
+      var name = b.group && b.id !== b.group ? b.id.slice(b.group.length + 1) : b.id;
+      var day = b.updated ? new Date(b.updated * 1000) : null;
+      var when = day ? pad(day.getMonth() + 1) + '-' + pad(day.getDate()) + ' ' + clock(b.updated) : '';
+      return '<option value="' + h(b.id) + '"' + (b.id === chosen ? ' selected' : '') + '>' + h(name) + ' · ' + h(tag) + (when ? ' · ' + h(when) : '') + '</option>';
+    };
+    var chosen = onRunsPage() ? '' : doc.batch_id;
+    return '<label class="picker"><span class="muted">run</span> <select data-batch aria-label="Choose a run">' + (chosen ? '' : '<option value="" selected disabled>choose a run…</option>') + order.map(function (g) {
+      var opts = groups[g].map(option).join('');
+      return g ? '<optgroup label="' + h(g) + '">' + opts + '</optgroup>' : opts;
+    }).join('') + '</select></label>';
+  }
+
+  function renderStrip(doc) {
+    var b = doc.batch, alive = b.alive || {}, dotClass = '', phaseClass = 'running', where = '';
+    if (b.phase === 'STOPPED') { dotClass = 'failed'; phaseClass = 'failed'; }
+    else if (b.abandoned) { dotClass = 'attention'; phaseClass = 'attention'; }
+    else if (b.phase === 'COMPLETE' || b.phase === 'LOCAL_REVIEWED') { dotClass = 'verified'; phaseClass = 'verified'; }
+    else if (alive.status === 'running') dotClass = 'running';
+    else dotClass = 'attention';
+    var checkpoint = alive.state_age_s == null ? '<b class="attention">never</b>' :
+      (alive.status === 'stale' ? '<b class="attention">No checkpoint for ' + h(dur(alive.state_age_s, true)) + '</b>' : '<b>' + h(ago(alive.state_age_s)) + '</b>');
+    if (b.mode === 'batch') where = 'packet ' + Math.min(b.index + 1, b.total) + ' of ' + b.total;
+    else if (b.mode === 'phases') where = b.index + ' of ' + b.total + ' phases done';
+    else where = 'single runner directory, no batch';
+    var unit = b.unit ? '<span>unit <b>' + h(b.unit) + '</b> <span class="muted">(not checked until P3)</span></span>' : '';
+    var clockB = b.budgets.clock, times = '';
+    if (clockB.started != null) {
+      times = '<span>started <b>' + h(clock(clockB.started)) + '</b>' +
+        (clockB.deadline != null ? ' · deadline <b>' + h(clock(clockB.deadline)) + '</b>' : '') +
+        (clockB.ended != null ? ' · ended <b>' + h(clock(clockB.ended)) + '</b>' : '') + '</span>';
+    }
+    return '<section class="panel strip" aria-label="Batch status">' +
+      '<div class="id"><span class="dot ' + dotClass + '" aria-hidden="true"></span><h1>' + h(b.id) + '</h1>' +
+      (b.repository ? '<span class="muted repo">' + h(b.repository) + '</span>' : '') + '</div>' +
+      '<div class="phase"><span class="pill ' + phaseClass + '">' + h(b.phase || 'unknown') + '</span><span class="muted">' + h(where) + '</span></div>' +
+      '<div class="right"><span>last checkpoint ' + checkpoint + '</span>' + unit + times +
+      (b.awake ? '<span>awake <b>' + h(b.awake) + '</b></span>' : '') +
+      (b.mode === 'phases' && b.budgets.cost_usd != null ? '<span>cost <b>$' + h(b.budgets.cost_usd.toFixed(2)) + '</b></span>' : '') +
+      (alive.reviewing && alive.reviewing.length ? '<span>reviewing <b>phase ' + h(alive.reviewing.join(', ')) + '</b></span>' : '') + '</div>' +
+      (b.abandoned ? '<div class="stop">Deadline passed at ' + h(clock(clockB.deadline)) + ' with no final checkpoint. Nothing is running; last activity ' + h(clock(clockB.ended)) + '.</div>' : '') +
+      (b.stop_requested && b.phase !== 'STOPPED' ? '<div class="stop">' + (b.mode === 'phases' ? 'STOP file present. The loop stops at its next phase or review boundary; remove the file before the next run.' : 'Stop requested. Finishing the current phase.') + '</div>' : '') +
+      (b.stop_requested && b.phase === 'STOPPED' && b.mode === 'phases' ? '<div class="stop">STOP file still present; remove it before the next run.</div>' : '') +
+      '</section>';
+  }
+
+  function meter(label, used, limit, opts) {
+    opts = opts || {};
+    var body;
+    if (opts.unknownReason) {
+      body = '<div class="lab"><span>' + h(label) + '</span><span class="num">' + unknown() + (limit != null ? ' / ' + num(limit) : '') + '</span></div>' +
+        '<div class="sub">' + h(opts.unknownReason) + '</div>';
+      return '<div class="meter">' + body + '</div>';
+    }
+    var fmt = opts.format || num;
+    var right = (used == null ? unknown() : fmt(used)) + (limit != null ? ' / ' + fmt(limit) : '') + (opts.suffix ? ' ' + h(opts.suffix) : '');
+    var bar = '';
+    if (used != null && limit) {
+      var pct = Math.max(0, used / limit * 100);
+      var cls = pct >= 100 ? ' failed' : pct >= 80 ? ' attention' : '';
+      bar = '<div class="bar' + cls + '"><i style="width:' + Math.min(pct, 100).toFixed(1) + '%"></i></div>';
+    }
+    return '<div class="meter"><div class="lab"><span>' + h(label) + '</span><span class="num">' + right + '</span></div>' + bar +
+      '<div class="sub">' + (opts.sub || '') + '</div></div>';
+  }
+
+  function renderPhaseMeters(doc) {
+    var b = doc.batch, bud = b.budgets, terminal = b.phase !== 'RUN';
+    var clockSub = bud.clock.started != null ? 'started ' + clock(bud.clock.started) + (bud.clock.ended != null ? ' · ended ' + clock(bud.clock.ended) : ' · still running') : 'no start recorded';
+    var ins = 0, cached = 0, outs = 0;
+    doc.packets.forEach(function (p) { var t = p.phase_run && p.phase_run.result && p.phase_run.result.tokens; if (t) { ins += t.input; cached += t.cached; outs += t.output; } });
+    return '<section class="meters" aria-label="Budgets">' +
+      '<div class="meter"><div class="lab"><span>Wall clock</span><span class="num">' + (bud.clock.used != null ? h(dur(bud.clock.used, true)) : unknown()) + '</span></div><div class="sub">' + h(clockSub) + ' · no deadline in this orchestrator</div></div>' +
+      meter('Phases done', b.index, b.total, {sub: (bud.calls.used || 0) + ' session' + (bud.calls.used === 1 ? '' : 's') + ' started' + (terminal ? '' : ', one running')}) +
+      '<div class="meter"><div class="lab"><span>Tokens</span><span class="num">' + num(bud.tokens.used) + '</span></div><div class="sub">in ' + num(ins) + ' (' + num(cached) + ' cached) · out ' + num(outs) + '</div></div>' +
+      '<div class="meter"><div class="lab"><span>Cost</span><span class="num">' + (bud.cost_usd != null ? '$' + h(bud.cost_usd.toFixed(2)) : unknown()) + '</span></div><div class="sub">summed from each session\'s own accounting</div></div>' +
+      '</section>';
+  }
+
+  function renderMeters(doc) {
+    if (doc.batch.mode === 'phases') return renderPhaseMeters(doc);
+    var b = doc.batch, bud = b.budgets, terminal = b.phase === 'STOPPED' || b.phase === 'COMPLETE' || b.phase === 'LOCAL_REVIEWED';
+    var clockSub = bud.clock.limit != null && bud.clock.used != null ?
+      (b.abandoned ? 'last activity ' + clock(bud.clock.ended) + ', deadline passed' : terminal ? 'ended at ' + clock(bud.clock.ended) : bud.clock.used >= bud.clock.limit ? 'past the deadline' : h(dur(bud.clock.limit - bud.clock.used, true)) + ' left, deadline ' + clock(bud.clock.deadline)) :
+      'no wall-clock limit recorded';
+    var queued = doc.packets.filter(function (p) { return p.status === 'queued'; }).length;
+    var callsSub = bud.calls.limit != null && bud.calls.used != null ?
+      (bud.calls.limit - bud.calls.used) + ' left' + (queued ? ' for ' + plural(queued, 'queued packet') : '') : 'no call limit recorded';
+    var tokens;
+    if (bud.tokens.incomplete) {
+      tokens = meter('Reported tokens', null, bud.tokens.limit, {unknownReason: 'Unknown: ' + (bud.tokens.reason || 'usage was not reported')});
+    } else {
+      tokens = meter('Reported tokens', bud.tokens.used, bud.tokens.limit, {sub: bud.tokens.limit != null ? 'accounting complete' : 'no batch limit; runner directory only'});
+    }
+    var packet = bud.packet, packetMeter;
+    if (packet && packet.calls) {
+      var corr = packet.corrections || {};
+      var sub = corr.used != null ? 'correction ' + corr.used + (corr.limit != null ? ' of ' + corr.limit : '') + ' used' : '';
+      packetMeter = meter('This packet', packet.calls.used, packet.calls.limit, {sub: sub, suffix: 'calls'});
+    } else {
+      packetMeter = '<div class="meter"><div class="lab"><span>This packet</span><span class="num muted">–</span></div><div class="sub">no packet in flight</div></div>';
+    }
+    return '<section class="meters" aria-label="Budgets">' +
+      meter('Wall clock', bud.clock.used, bud.clock.limit, {format: function (s) { return h(dur(s, true)); }, sub: clockSub}) +
+      meter('Model calls', bud.calls.used, bud.calls.limit, {sub: callsSub}) +
+      tokens + packetMeter + '</section>';
+  }
+
+  function renderTape(doc) {
+    var b = doc.batch, now = doc.generated, rows = doc.packets.filter(function (p) { return p.status !== 'queued' && p.started != null; });
+    var t0 = b.budgets.clock.started, t1 = b.budgets.clock.deadline;
+    if (t0 == null && rows.length) t0 = Math.min.apply(null, rows.map(function (p) { return p.started; }));
+    if (t1 == null && t0 != null && b.budgets.clock.limit) t1 = t0 + b.budgets.clock.limit;
+    var end = b.budgets.clock.ended != null ? b.budgets.clock.ended : now;
+    var noDeadline = b.budgets.clock.deadline == null;
+    if (t1 == null && t0 != null) t1 = Math.max(end, t0 + 600);
+    if (t1 == null || t0 == null) {
+      return '<figure class="panel tape"><header><h2>Tonight</h2><span class="muted">no start or deadline recorded</span></header>' +
+        '<figcaption>The tape needs a batch start and a deadline. Neither is in this checkpoint.</figcaption></figure>';
+    }
+    var span = Math.max(t1 - t0, 60), left = 20, width = 960;
+    var x = function (t) { return left + Math.min(Math.max((t - t0) / span, 0), 1) * width; };
+    var rowH = 30, height = 18 + Math.max(rows.length, 1) * rowH + 22;
+    var svg = [];
+    // hour axis
+    var firstHour = Math.floor(t0 / 3600) * 3600, every = span > 12 * 3600 ? 7200 : span > 3 * 3600 ? 3600 : span > 3600 ? 1800 : 600;
+    var ticks = [];
+    for (var t = firstHour; t <= t1 + every; t += every) if (t >= t0 - 1 && t <= t1 + 1) ticks.push(t);
+    svg.push('<g font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="var(--muted)">');
+    ticks.forEach(function (t) { svg.push('<text x="' + x(t).toFixed(1) + '" y="12" text-anchor="middle">' + h(clock(t)) + '</text>'); });
+    svg.push('</g><g stroke="var(--hair)" stroke-width="1">');
+    ticks.forEach(function (t) { svg.push('<line x1="' + x(t).toFixed(1) + '" y1="18" x2="' + x(t).toFixed(1) + '" y2="' + (height - 14) + '"/>'); });
+    svg.push('</g>');
+    // future
+    var nowX = x(end), futureRows = doc.packets.filter(function (p) { return p.status === 'queued'; }).length;
+    if (end < t1) {
+      svg.push('<rect x="' + nowX.toFixed(1) + '" y="18" width="' + (left + width - nowX).toFixed(1) + '" height="' + (height - 32) + '" fill="var(--sunken)" opacity=".5"/>');
+      var callsLeft = b.budgets.calls.limit != null && b.budgets.calls.used != null ? (b.budgets.calls.limit - b.budgets.calls.used) + ' calls' : 'calls unknown';
+      var label = dur(t1 - end, true) + ' left · ' + callsLeft + (futureRows ? ' · ' + plural(futureRows, 'packet') + ' still to run' : '');
+      if (b.phase === 'STOPPED') label = 'stopped ' + dur(t1 - end, true) + ' before the deadline' + (futureRows ? ' · ' + plural(futureRows, 'packet') + ' not run' : '');
+      else if (b.abandoned) label = 'no checkpoint after ' + clock(end) + ' · deadline passed' + (futureRows ? ' · ' + plural(futureRows, 'packet') + ' not run' : '');
+      else if (b.phase === 'COMPLETE' || b.phase === 'LOCAL_REVIEWED') label = 'finished ' + dur(t1 - end, true) + ' before the deadline';
+      if (left + width - nowX > 180) {
+        svg.push('<text x="' + ((nowX + left + width) / 2).toFixed(1) + '" y="' + (18 + (height - 32) / 2 + 4) + '" font-family="system-ui,sans-serif" font-size="11" fill="var(--muted)" text-anchor="middle">' + h(label) + '</text>');
+      }
+    }
+    // rows
+    var summary = [];
+    rows.forEach(function (p, i) {
+      var y = 26 + i * rowH, start = x(p.started), stop = x(p.finished != null ? p.finished : end);
+      var reg = registerFor(p) || 'running';
+      var fill = reg === 'verified' ? 'var(--verified-soft)' : reg === 'failed' ? 'var(--failed-soft)' : 'var(--running-soft)';
+      var stroke = reg === 'verified' ? 'var(--verified)' : reg === 'failed' ? 'var(--failed)' : 'var(--running)';
+      var w = Math.max(stop - start, 3);
+      var label = 'P' + (doc.packets.indexOf(p) + 1);
+      if (p.pr && p.pr.number) label += ' · #' + p.pr.number;
+      else if (p.status === 'running') label += ' · ' + (p.phase || p.batch_phase || 'running');
+      else if (p.status === 'stopped') label += ' · STOPPED';
+      else if (p.status === 'reviewed') label += ' · LOCAL_REVIEWED';
+      if (p.corrections) label += ' · ' + plural(p.corrections, 'correction');
+      svg.push('<rect x="' + start.toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) + '" height="16" rx="2" fill="' + fill + '" stroke="' + stroke + '"/>');
+      if (w > 30) svg.push('<text x="' + (start + 5).toFixed(1) + '" y="' + (y + 11.5) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">' + h(label) + '</text>');
+      var calls = (p.runner && p.runner.call_list) || [];
+      svg.push('<g fill="var(--fg)" opacity=".7">');
+      calls.forEach(function (c) { if (c.at != null) svg.push('<rect x="' + (x(c.at) - 1).toFixed(1) + '" y="' + (y + 19) + '" width="2" height="7"/>'); });
+      svg.push('</g>');
+      summary.push(label + ' from ' + clock(p.started) + (p.finished != null ? ' to ' + clock(p.finished) : ' still running'));
+    });
+    // now and deadline
+    svg.push('<line x1="' + nowX.toFixed(1) + '" y1="18" x2="' + nowX.toFixed(1) + '" y2="' + (height - 10) + '" stroke="var(--running)" stroke-width="2"/>');
+    var nowLabel = (b.abandoned ? 'last activity ' : b.budgets.clock.ended != null ? 'ended ' : 'now ') + clock(end);
+    var nowAnchor = nowX > left + width - 120 ? 'end' : 'start';
+    svg.push('<text x="' + (nowAnchor === 'end' ? nowX - 5 : nowX + 5).toFixed(1) + '" y="' + (height - 4) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="var(--running)" text-anchor="' + nowAnchor + '">' + h(nowLabel) + '</text>');
+    var dx = x(t1);
+    if (!noDeadline) {
+      svg.push('<line x1="' + dx.toFixed(1) + '" y1="18" x2="' + dx.toFixed(1) + '" y2="' + (height - 10) + '" stroke="var(--attention)" stroke-width="1.5" stroke-dasharray="3 3"/>');
+      if (Math.abs(dx - nowX) > 140 || nowAnchor === 'start') {
+        svg.push('<text x="' + (dx - 5).toFixed(1) + '" y="' + (height - 4) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10.5" fill="var(--attention)" text-anchor="end">deadline ' + h(clock(t1)) + '</text>');
+      }
+    }
+    var aria = 'Timeline from ' + clock(t0) + ' to the ' + clock(t1) + ' deadline. ' + (summary.join('. ') || 'No packet has started.') + '. Now ' + clock(end) + '.';
+    var tapeCaption = noDeadline ? h(clock(t0)) + ' to ' + h(clock(end)) + ' · one bar per phase session' : h(clock(t0)) + ' to the ' + h(clock(t1)) + ' deadline · each tick is one model call';
+    return '<figure class="panel tape" aria-label="Timeline"><header><h2>Tonight</h2><span class="muted">' +
+      tapeCaption + (dayOf(t0) !== dayOf(now) ? ' · started ' + h(dayOf(t0)) : '') + '</span></header>' +
+      '<div class="scroll"><svg viewBox="0 0 1000 ' + height + '" role="img" aria-label="' + h(aria) + '">' + svg.join('') + '</svg></div>' +
+      '<div class="legend"><span><i style="background:var(--verified-soft);border:1px solid var(--verified)"></i>merged</span>' +
+      '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>running</span>' +
+      '<span><i style="background:var(--failed-soft);border:1px solid var(--failed)"></i>stopped</span>' +
+      '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>' +
+      '<span><i style="background:var(--sunken);border:1px solid var(--hair)"></i>not yet</span></div>' +
+      '<figcaption>' + (b.mode === 'phases' ? 'Times come from the coordinator log\'s own timestamps.' : 'Times come from file modification times until the event log ships, so treat them as approximate to a minute.') + '</figcaption></figure>';
+  }
+
+  function stateCell(p) {
+    if (p.status === 'merged') {
+      var text = (p.phase_run ? 'done on staging' : 'merged') + (p.pr && p.pr.number ? ' #' + p.pr.number : '');
+      return p.pr && p.pr.url ? '<a href="' + h(p.pr.url) + '" target="_blank" rel="noopener">' + h(text) + '</a>' : h(text);
+    }
+    if (p.status === 'running') {
+      var phase = p.batch_phase && p.batch_phase !== 'RUN' ? p.batch_phase : (p.phase || p.batch_phase || 'running');
+      var pr = p.pr && p.pr.number ? ' <span class="muted mono">#' + p.pr.number + '</span>' : '';
+      return '<span class="pill running">' + h(phase) + '</span>' + pr;
+    }
+    if (p.status === 'stopped' && p.phase_run) return '<span class="pill failed">not done</span>' + (p.phase_run.staging_status ? ' <span class="muted">staging: ' + h(p.phase_run.staging_status) + '</span>' : '');
+    if (p.status === 'stopped') return '<span class="pill failed">STOPPED</span>' + (p.batch_phase ? ' <span class="muted">in ' + h(p.batch_phase) + '</span>' : '');
+    if (p.status === 'reviewed') return '<span class="pill verified">LOCAL_REVIEWED</span>';
+    return '<span class="q">queued' + (p.advisory_review ? ' · advisory review' : '') + '</span>';
+  }
+
+  function renderRail(doc) {
+    var counts = {merged: 0, running: 0, queued: 0, stopped: 0, reviewed: 0};
+    doc.packets.forEach(function (p) { counts[p.status] = (counts[p.status] || 0) + 1; });
+    var parts = [];
+    if (counts.merged) parts.push(counts.merged + (doc.batch.mode === 'phases' ? ' done' : ' merged'));
+    if (counts.reviewed) parts.push(counts.reviewed + ' reviewed');
+    if (counts.running) parts.push(counts.running + ' running');
+    if (counts.stopped) parts.push(counts.stopped + ' stopped');
+    if (counts.queued) parts.push(counts.queued + ' queued');
+    var rows = doc.packets.map(function (p) {
+      var reg = registerFor(p), q = p.status === 'queued';
+      var cell = function (value, label, fmt) {
+        return '<td class="num' + (q ? ' q' : '') + '" data-label="' + label + '">' + (q ? '–' : value == null ? unknown() : fmt(value)) + '</td>';
+      };
+      var elapsed = p.elapsed_s;
+      return '<tr class="' + reg + (p.id === state.selected ? ' selected' : '') + '"' + (q ? '' : ' data-id="' + h(p.id) + '" tabindex="0" role="button" aria-label="Show ' + h(p.id) + '"') + '>' +
+        '<td><span class="dot ' + reg + '" aria-hidden="true"></span></td>' +
+        '<td class="title"><div class="t">' + h(p.title) + '</div><div class="s mono">' + h(p.id) + '</div></td>' +
+        '<td class="state">' + stateCell(p) + '</td>' +
+        cell(p.calls, 'calls', num) + (p.phase_run && p.corrections == null ? '<td class="num q" data-label="corr.">–</td>' : cell(p.corrections, 'corr.', num)) + cell(p.tokens, 'tokens', num) +
+        cell(elapsed, 'time', function (s) { return h(dur(s, true)); }) + '</tr>';
+    }).join('');
+    return '<section class="panel" aria-label="Packet queue"><header><h2>Queue</h2><span class="muted">' + h(parts.join(' · ') || 'no packets') + '</span></header>' +
+      '<table class="rail"><thead><tr><th></th><th>' + (doc.batch.mode === 'phases' ? 'Phase' : 'Packet') + '</th><th>State</th><th class="num">' + (doc.batch.mode === 'phases' ? 'Sessions' : 'Calls') + '</th><th class="num">Corr.</th><th class="num">Tokens</th><th class="num">Time</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody></table></section>';
+  }
+
+  function stageRail(label, stages, current, doneAll, failedAt) {
+    var idx = stages.indexOf(current);
+    return '<div class="stage"><span class="lab">' + h(label) + '</span>' + stages.map(function (s, i) {
+      var cls = '';
+      if (doneAll || (idx >= 0 && i < idx)) cls = 'done';
+      if (idx >= 0 && i === idx) cls = 'now';
+      if (failedAt === s) cls = 'failed';
+      return '<span class="' + cls + '">' + h(s) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  function callVerdict(c) {
+    if (c.inflight) return '<span class="pill running">in flight</span> <span class="muted">usage arrives when it returns</span>';
+    if (c.never_dispatched) return '<span class="pill">never dispatched</span> <span class="muted">counted, then refused by the budget check</span>';
+    if (!c.result) return '<span class="pill attention">no result recorded</span>';
+    if (c.role === 'reviewer' || c.role === 'advisory') {
+      var bits = [];
+      if (c.blocking) bits.push('<span class="pill failed">' + plural(c.blocking, 'blocking') + '</span>');
+      if (c.notes) bits.push('<span class="muted">' + plural(c.notes, 'note') + '</span>');
+      if (!c.blocking && !c.notes) bits.push('<span class="pill verified">no findings</span>');
+      return bits.join(' ');
+    }
+    return '<span class="muted">' + h(c.outcome || 'patch returned') + '</span>';
+  }
+
+  function renderChecks(r) {
+    var checks = r.checks || [];
+    if (!checks.length) return '<span class="muted">No check has run yet.</span>';
+    return checks.map(function (c) {
+      var pill, third;
+      if (c.running) pill = '<span class="pill running">running</span>';
+      else if (c.pending) pill = '<span class="pill">pending</span>';
+      else if (c.exit_code === 0) pill = '<span class="pill verified">exit 0</span>';
+      else if (typeof c.exit_code === 'number') pill = '<span class="pill failed">exit ' + c.exit_code + '</span>';
+      else if (c.finished) pill = '<span class="pill attention">finished</span>';
+      else pill = '<span class="pill">earlier round</span>';
+      var label = h(c.id);
+      if (c.running) label += c.elapsed_s != null ? ' · running ' + h(dur(c.elapsed_s)) : ' · running';
+      else if (c.finished) label += (c.duration_s != null ? ' · ' + h(dur(c.duration_s)) : '') + ' · exit code with the next checkpoint';
+      else label += ' · correction ' + h(c.correction == null ? '?' : c.correction) + (c.duration_s != null ? ' · ' + h(dur(c.duration_s)) : '');
+      var open = c.log && state.openLogs[c.log];
+      if (c.log_available) third = '<button type="button" data-log="' + h(c.log) + '">' + (open ? 'hide raw log' : 'raw log') + '</button>';
+      else third = '<span class="muted">' + h(c.command || '') + '</span>';
+      var body = '';
+      var d = c.digest;
+      if (d) {
+        var parts = [];
+        d.groups.forEach(function (g) {
+          var tests = g.tests.length === 1 ? g.tests[0] : plural(g.tests.length, 'test') + ' (' + g.tests.slice(0, 3).join(', ') + (g.tests.length > 3 ? ', …' : '') + ')';
+          var msg = g.message.length > 220 ? g.message.slice(0, 220) + '…' : g.message;
+          parts.push('<div class="finding' + (g.kind === 'FAIL' || g.kind === 'ERROR' ? ' blocking' : '') + '"><span class="tag">' + h(g.kind) + '</span><span><span class="where">' + h(tests) + '</span> ' + h(msg) + '</span></div>');
+        });
+        if (d.summary) parts.push('<div class="muted mono" style="font-size:11.5px">' + h(d.summary) + '</div>');
+        body += '<div class="digest">' + parts.join('') + '</div>';
+      } else if (c.tail && c.tail.length < 200 && !c.running && !c.pending) {
+        body += '<div class="digest"><div class="muted mono" style="font-size:11.5px">' + h(c.tail) + '</div></div>';
+      }
+      if (open) {
+        var entry = state.logs[c.log];
+        if (!entry || entry.loading) body = '<div class="log">loading…</div>';
+        else if (entry.error) body = '<div class="log">' + h(entry.error) + '</div>';
+        else body += '<div class="log">' + (entry.truncated ? '…(last ' + entry.tail.length.toLocaleString('en-US') + ' of ' + entry.size.toLocaleString('en-US') + ' characters)\n' : '') + h(entry.tail || '(empty log)') + '</div>';
+      }
+      return '<div class="check">' + pill + '<span class="mono">' + label + '</span>' + third + body + '</div>';
+    }).join('');
+  }
+
+  function findingRow(f, blocking) {
+    return '<div class="finding' + (blocking ? ' blocking' : '') + '"><span class="tag' + (blocking ? '' : ' note') + '">' + (blocking ? 'blocking' : h(f.severity || 'note')) + '</span>' +
+      '<span><span class="where">' + h(f.file || '') + '</span> ' + h(f.summary || '') + (f.failure_scenario ? ' <span class="muted">' + h(f.failure_scenario) + '</span>' : '') + '</span></div>';
+  }
+
+  function renderReview(title, review) {
+    if (!review) return '';
+    var out = ['<div style="display:grid;gap:8px"><h3>' + h(title) + (review.candidate ? ' of candidate ' + h(review.candidate.slice(0, 8)) : '') + '</h3>'];
+    review.blocking.forEach(function (f) { out.push(findingRow(f, true)); });
+    review.notes.forEach(function (f) { out.push(findingRow(f, false)); });
+    if (!review.blocking.length && !review.notes.length) out.push('<span class="pill verified" style="justify-self:start">no findings</span>');
+    if (review.notes.length) out.push('<span class="muted" style="font-size:11.5px">Notes travel into the PR body. They never cost a correction.</span>');
+    out.push('</div>');
+    return out.join('');
+  }
+
+  function renderPhaseDetail(doc, p) {
+    var r = p.phase_run, res = r.result || {}, t = res.tokens;
+    var head = '<header><h2>' + h(p.id) + ' · ' + h(p.title) + '</h2><span class="muted">' + (res.model ? 'model ' + h(res.model) : 'model unknown') + (res.session ? ' · session <span class="mono">' + h(res.session.slice(0, 8)) + '</span>' : '') + '</span></header>';
+    var pills = [];
+    if (r.exit_code === 0) pills.push('<span class="pill verified">exit 0</span>');
+    else if (typeof r.exit_code === 'number') pills.push('<span class="pill failed">exit ' + r.exit_code + '</span>');
+    else if (r.status === 'running') pills.push('<span class="pill running">running</span>');
+    if (r.staging_status) pills.push('<span class="pill ' + (r.staging_status === 'done' ? 'verified' : 'attention') + '">staging: ' + h(r.staging_status) + '</span>');
+    if (r.already_done) pills.push('<span class="pill">already done on a later pass</span>');
+    if (res.is_error) pills.push('<span class="pill failed">session error</span>');
+    if (p.pr && p.pr.url) pills.push('<a href="' + h(p.pr.url) + '" target="_blank" rel="noopener">PR #' + p.pr.number + '</a>');
+    var facts = '<dl class="kv">' +
+      '<dt>Took</dt><dd>' + (r.elapsed_s != null ? h(dur(r.elapsed_s)) : '?') + (res.duration_api_s != null ? ' <span class="muted">(' + h(dur(res.duration_api_s)) + ' of model time' + (res.turns != null ? ', ' + plural(res.turns, 'turn') : '') + ')</span>' : '') + '</dd>' +
+      '<dt>Started</dt><dd>' + (r.started != null ? h(clock(r.started)) : '?') + (r.finished != null ? ' · ended ' + h(clock(r.finished)) : '') + (r.attempts > 1 ? ' · ' + plural(r.attempts, 'attempt') : '') + '</dd>' +
+      '<dt>Tokens</dt><dd>' + (t ? num(t.input + t.output) + ' <span class="muted">in ' + num(t.input) + ' (' + num(t.cached) + ' cached) · out ' + num(t.output) + (t.thinking != null ? ' · thinking ' + num(t.thinking) : '') + '</span>' : unknown()) + '</dd>' +
+      '<dt>Cost</dt><dd>' + (res.cost_usd != null ? '$' + h(res.cost_usd.toFixed(2)) : unknown()) + '</dd>' +
+      (r.prompt ? '<dt>Prompt</dt><dd class="path"><code>' + h(r.prompt) + '</code><button type="button" data-copy="' + h(r.prompt) + '">copy path</button></dd>' : '') +
+      (r.output ? '<dt>Output</dt><dd class="path"><code>' + h(r.output) + '</code><button type="button" data-copy="' + h(r.output) + '">copy path</button></dd>' : '') +
+      (r.stderr ? '<dt>Stderr</dt><dd>' + (r.stderr_bytes ? '<button type="button" data-log="' + h(r.stderr) + '">' + (state.openLogs[r.stderr] ? 'hide' : 'show') + ' ' + num(r.stderr_bytes) + ' bytes</button>' : '<span class="muted">empty</span>') + '</dd>' : '') +
+      '</dl>';
+    var errBody = '';
+    if (r.stderr && state.openLogs[r.stderr]) {
+      var entry = state.logs[r.stderr];
+      errBody = '<div class="log">' + (!entry || entry.loading ? 'loading…' : entry.error ? h(entry.error) : h(entry.tail || '(empty)')) + '</div>';
+    }
+    var claim = '<div class="card claim"><header><h3>What the session says it did</h3><span class="pill">unverified claim</span></header><div>' +
+      (res.result ? '<div class="text' + (state.claimOpen ? ' open' : '') + '">' + mini(res.result) + '</div>' + (res.result.length > 700 ? '<div><button type="button" data-claim>' + (state.claimOpen ? 'show less' : 'show all of it') + '</button></div>' : '') : '<p>No result text recorded.</p>') +
+      '<p style="font-size:11.5px">The coordinator only checks the phase\'s row in STATUS.md on staging. The PR\'s CI is the machine gate.</p></div></div>';
+    var supervisor = '<div class="card"><header><h3>What the coordinator recorded</h3><span class="muted mono">coordinator.log</span></header><div>' +
+      (r.summary ? '<p>' + h(r.summary) + '</p><p class="muted" style="font-size:11.5px">The END line keeps the last 600 characters of the session\'s final message.</p>' : '<span class="muted">No END line yet.</span>') + errBody + '</div></div>';
+    var corrections = '';
+    if (r.corrections && r.corrections.length) {
+      corrections = '<div style="display:grid;gap:6px"><h3>Correction rounds</h3>' + r.corrections.map(function (c) {
+        var pill = c.exit_code === 0 ? '<span class="pill verified">exit 0</span>' : typeof c.exit_code === 'number' ? '<span class="pill failed">exit ' + c.exit_code + '</span>' : '<span class="pill running">running</span>';
+        var took = c.started != null && c.finished != null ? dur(c.finished - c.started, true) : c.started != null ? dur(doc.generated - c.started, true) + ' so far' : '?';
+        return '<div class="check">' + pill + '<span class="mono">round ' + c.round + ' · ' + h(c.model) + ' · ' + h(took) + '</span><span class="muted">on ' + h(c.branch) + ' · PR #' + c.pr + '</span></div>';
+      }).join('') + '</div>';
+    }
+    var review = '';
+    if (r.review) {
+      var rv = r.review, parts = ['<div style="display:grid;gap:8px"><h3>Independent review' + (rv.pr ? ' of PR #' + rv.pr : '') + (rv.round != null ? ' · round ' + rv.round : '') + (rv.review_only ? ' <span class="muted">(review-only rerun)</span>' : '') + '</h3>'];
+      var verdictPills = [];
+      if (rv.verdict) verdictPills.push('<span class="pill ' + (rv.verdict === 'CLEAN' ? 'verified' : rv.verdict === 'BLOCKING' ? 'failed' : 'attention') + '">Claude: ' + h(rv.verdict) + '</span>');
+      if (rv.advisory) verdictPills.push('<span class="pill ' + (rv.advisory === 'CLEAN' ? 'verified' : rv.advisory === 'BLOCKING' ? (rv.gating === 'BLOCKING' ? 'failed' : 'attention') : '') + '">GPT: ' + h(rv.advisory) + (rv.gating != null ? (rv.advisory === 'BLOCKING' && rv.gating !== 'BLOCKING' ? ' · advisory only' : '') : '') + '</span>');
+      if (verdictPills.length) parts.push('<div class="toolbar">' + verdictPills.join(' ') + '</div>');
+      if (rv.posted) parts.push('<span class="pill verified" style="justify-self:start">posted to the PR</span>');
+      else if (rv.claude || rv.gpt) parts.push('<span class="pill attention" style="justify-self:start">not posted yet</span>');
+      else parts.push('<span class="pill running" style="justify-self:start">review running' + (rv.started != null ? ' since ' + h(clock(rv.started)) : '') + '</span>');
+      var block = function (title, item) {
+        if (!item) return '<div class="card"><header><h3>' + h(title) + '</h3><span class="muted">not yet</span></header><div><span class="muted">No output yet.</span></div></div>';
+        var stale = item.stale ? '<span class="pill attention">from an earlier round</span> ' : '';
+        var body = item.text ? mini(item.text) : (!rv.posted ? '<span class="pill running">being written</span>' : '<span class="muted">empty</span>');
+        return '<div class="card"><header><h3>' + h(title) + '</h3><span class="muted mono">' + stale + h(item.path.split('/').pop()) + (item.at ? ' · ' + h(clock(item.at)) : '') + '</span></header><div class="reviewtext">' +
+          body + (item.truncated ? '<p class="muted">Truncated; the whole file is on disk.</p>' : '') + '</div></div>';
+      };
+      var gptBlock = block('GPT advisory review', rv.gpt);
+      if (!rv.gpt && rv.gpt_stderr && rv.gpt_stderr.bytes) gptBlock = gptBlock.replace('<span class="muted">No output yet.</span>', '<span class="muted">No output yet.</span> <button type="button" data-log="' + h(rv.gpt_stderr.path) + '">' + (state.openLogs[rv.gpt_stderr.path] ? 'hide' : 'show') + ' codex stderr (' + num(rv.gpt_stderr.bytes) + ' bytes)</button>' + (state.openLogs[rv.gpt_stderr.path] ? '<div class="log">' + h((state.logs[rv.gpt_stderr.path] || {}).tail || (state.logs[rv.gpt_stderr.path] || {}).error || 'loading…') + '</div>' : ''));
+      parts.push('<div class="two">' + block('Claude review (primary)', rv.claude) + gptBlock + '</div>');
+      if (rv.notes && rv.notes.length) parts.push('<div class="muted" style="font-size:11.5px">' + rv.notes.map(h).join(' · ') + '</div>');
+      parts.push('<span class="muted" style="font-size:11.5px">Merge is the owner\'s decision. A blocking finding is fixed on the branch before merging.</span></div>');
+      review = parts.join('');
+    }
+    return '<section class="panel" aria-label="Packet detail">' + head + '<div class="detail"><div class="toolbar" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">' + pills.join(' ') + '</div>' + facts +
+      '<div class="two">' + supervisor + claim + '</div>' + corrections + review + '</div></section>';
+  }
+
+  function renderDetail(doc) {
+    var p = null;
+    doc.packets.forEach(function (x) { if (x.id === state.selected) p = x; });
+    if (!p) return '';
+    if (p.phase_run) return renderPhaseDetail(doc, p);
+    var r = p.runner, w = p.worker || {};
+    var head = '<header><h2>' + h(p.id) + '</h2><span class="muted">' + (p.evidence_from ? 'evidence from the earlier run <span class="mono">' + h(p.evidence_from.split('/').pop()) + '</span> · ' : '') +
+      (w.model ? 'worker ' + h(w.model) + (w.reasoning ? ' · reasoning ' + h(w.reasoning) : '') : 'worker unknown') +
+      (p.owned_files && p.owned_files.length ? ' · owns ' + plural(p.owned_files.length, 'file') : '') +
+      (p.advisory_review ? ' · advisory review' : '') + '</span></header>';
+    if (!r) {
+      var note = p.status === 'merged' ? 'The runner directory for this packet is not present.' : 'No runner checkpoint yet. The batch is in ' + h(p.batch_phase || 'PREPARE') + '.';
+      return '<section class="panel" aria-label="Packet detail">' + head + '<div class="detail"><span class="muted">' + note + '</span></div></section>';
+    }
+    if (r.unreadable) {
+      return '<section class="panel" aria-label="Packet detail">' + head + '<div class="detail"><span class="unknown">The runner checkpoint could not be parsed; see the message above.</span></div></section>';
+    }
+    var packetDone = r.phase === 'LOCAL_REVIEWED' || p.status === 'merged' || (p.batch_phase && BATCH_STAGES.indexOf(p.batch_phase) >= 0);
+    var batchNow = p.status === 'merged' ? null : (BATCH_STAGES.indexOf(p.batch_phase) >= 0 ? p.batch_phase : null);
+    var failedStage = null;
+    if (p.status === 'stopped') failedStage = r.phase === 'STOPPED' ? null : r.phase;
+    var stages = '<div class="stages">' +
+      stageRail('packet', PACKET_STAGES, packetDone ? null : r.phase, packetDone, failedStage) +
+      stageRail('batch', BATCH_STAGES, batchNow, p.status === 'merged', p.status === 'stopped' && BATCH_STAGES.indexOf(p.batch_phase) >= 0 ? p.batch_phase : null) + '</div>';
+    var inflightLine = r.inflight && r.inflight.label ? '<div class="muted" style="margin-top:6px">in flight: <span class="mono">' + h(r.inflight.label) + '</span>' + (r.checkpoint_at != null ? ' since ' + h(clock(r.checkpoint_at)) + ', ' + h(dur(doc.generated - r.checkpoint_at)) : '') + '</div>' : '';
+    var stoppedLine = r.phase === 'STOPPED' || p.status === 'stopped' ?
+      '<div class="finding blocking"><span class="tag">stopped</span><span>' + h(r.reason || doc.batch.reason || 'no reason recorded') + '</span></div>' : '';
+    var calls = '<div><h3 style="margin-bottom:6px">Model calls</h3>' + (r.call_list.length ?
+      '<table class="calls"><tr class="head"><td></td><td>role</td><td>model</td><td class="num">took</td><td class="num">tokens</td><td></td></tr>' + r.call_list.map(function (c) {
+        var u = c.usage, breakdown = u ? '<div class="muted" style="font-size:11px">in ' + num(u.input) + (u.cached ? ' <span title="cached input, billed at a tenth">(' + num(u.cached) + ' cached)</span>' : '') + ' · out ' + num(u.output) + '</div>' : '';
+        var took = c.duration_s != null ? h(dur(c.duration_s, true)) + (c.inflight ? ' <span class="muted">so far</span>' : '') : (c.result ? '<span class="muted">?</span>' : '<span class="muted">–</span>');
+        var toks = c.inflight || c.never_dispatched ? '<span class="muted">–</span>' : num(c.tokens);
+        return '<tr><td class="num">' + c.n + '</td><td>' + h(c.role || 'unknown role') + '</td><td class="mono">' + h(c.model || '?') + '</td><td class="num">' + took + '</td><td class="num">' + toks + breakdown + '</td><td>' + callVerdict(c) + '</td></tr>';
+      }).join('') + '</table>' : '<span class="muted">No model call yet.</span>') +
+      inflightLine + '</div>';
+    var checksHead = '<span class="muted mono">correction ' + h(r.corrections == null ? '?' : r.corrections) + (r.max_corrections != null ? ' of ' + h(r.max_corrections) : '') +
+      (r.checks_started != null ? ' · round started ' + h(clock(r.checks_started)) + ', ' + h(dur(doc.generated - r.checks_started, true)) + ' ago' : '') + '</span>';
+    var two = '<div class="two"><div class="card"><header><h3>Checks the supervisor ran</h3>' + checksHead + '</header><div>' + renderChecks(r) + '</div></div>' +
+      '<div class="card claim"><header><h3>What the worker says it did</h3><span class="pill">unverified claim</span></header><div>' +
+      (r.claim ? '<div class="text' + (state.claimOpen ? ' open' : '') + '">' + mini(r.claim.summary) + '</div>' +
+        (r.claim.summary.length > 700 ? '<div><button type="button" data-claim>' + (state.claimOpen ? 'show less' : 'show all of it') + '</button></div>' : '') +
+        '<p style="font-size:11.5px">From call ' + r.claim.call + (r.claim.at ? ' at ' + h(clock(r.claim.at)) : '') + '. The supervisor does not act on any of this text. The checks and the review decide.</p>' :
+        '<p>No worker result recorded yet.</p>') + '</div></div></div>';
+    var feedback = r.feedback_summary && r.corrections ? '<div class="muted" style="font-size:11.5px">Correction ' + r.corrections + ' was caused by ' + h(r.feedback_summary) + '.</div>' : '';
+    var reviews = renderReview('Review', r.review) + renderReview('Advisory review', r.advisory);
+    if (!r.review) reviews = '<span class="muted">No review yet.</span>';
+    var candidate;
+    if (r.diff) {
+      candidate = '<div class="path"><h3>Candidate ' + h(r.candidate_short || '') + '</h3>' +
+        '<span class="mono">' + plural(r.diff.files, 'file') + ' · <span class="add">+' + r.diff.added + '</span> <span class="del">−' + r.diff.removed + '</span></span>' +
+        '<code>' + h(r.diff.path) + '</code><button type="button" data-copy="' + h(r.diff.path) + '">copy path</button></div>';
+    } else {
+      candidate = '<div class="path"><h3>Candidate</h3><span class="muted">no reviewed diff yet</span>' +
+        '<code>' + h(r.run_dir) + '</code><button type="button" data-copy="' + h(r.run_dir) + '">copy path</button></div>';
+    }
+    return '<section class="panel" aria-label="Packet detail">' + head + '<div class="detail">' + stages + stoppedLine + calls + two + feedback + reviews + candidate + '</div></section>';
+  }
+
+  function renderFooter(doc) {
+    var theme = currentTheme();
+    var dir = onRunsPage() && doc ? (doc.root || doc.directory) : (doc && doc.batch ? doc.batch.evidence_dir : (doc ? doc.directory : ''));
+    return '<footer class="note"><div>Read-only. Evidence stays on disk at <span class="mono">' + h(dir) + '</span>. Polled every 3 s. ' + (doc && doc.batch && doc.batch.mode === 'phases' ? 'Times are from the coordinator log.' : 'Times are file modification times, approximate.') + '</div>' +
+
+      '<div class="theme" role="group" aria-label="Theme">' + ['auto', 'light', 'dark'].map(function (t) {
+        return '<button type="button" data-theme-pick="' + t + '" aria-pressed="' + (theme === t) + '">' + t + '</button>';
+      }).join('') + '</div></footer>';
+  }
+
+  function paintOffline() {
+    var el = document.getElementById('offline');
+    if (!el) return;
+    el.hidden = !state.offline;
+    el.textContent = state.offline ? 'Cannot reach the monitor server (' + state.offline + '). Showing the last state received. Start it with: python -m scripts.monitor.serve --directory <evidence-dir>' : '';
+  }
+
+  function render() {
+    var doc = state.doc, out = ['<div id="offline" class="offline" hidden></div>'];
+    if (!doc) {
+      out.push(renderNav(null), '<section class="panel empty"><p><b>No state received.</b></p><p class="muted">Open this page through the monitor server, not from a file:</p><code class="mono">python -m scripts.monitor.serve --directory &lt;evidence-dir&gt;</code></section>');
+      out.push(renderFooter(null));
+      app.innerHTML = out.join('');
+      paintOffline();
+      return;
+    }
+    out.push(renderNav(doc));
+    if (onRunsPage()) {
+      out.push(renderRuns(doc), renderFooter(doc));
+      app.innerHTML = out.join('');
+      paintOffline();
+      document.title = 'Runs · Batch Board';
+      return;
+    }
+    out.push(renderErrors(doc));
+    var empty = renderEmpty(doc);
+    if (empty) {
+      out.push(empty, renderFooter(doc));
+    } else {
+      state.selected = pickSelected(doc);
+      out.push(renderNeedsYou(doc.batch), renderStopCard(doc.batch), renderStrip(doc), renderControls(doc), renderMeters(doc), renderTape(doc), renderRail(doc), renderDetail(doc), renderFooter(doc));
+    }
+    app.innerHTML = out.join('');
+    paintOffline();
+    document.title = (doc.batch ? doc.batch.id + ' · ' : '') + 'Batch Board';
+  }
+
+  // ---------------------------------------------------------------- theme
+  function currentTheme() {
+    var t = document.documentElement.getAttribute('data-theme');
+    return t === 'light' || t === 'dark' ? t : 'auto';
+  }
+  function applyTheme(t) {
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    else document.documentElement.removeAttribute('data-theme');
+    try { if (t === 'auto') localStorage.removeItem('monitor-theme'); else localStorage.setItem('monitor-theme', t); } catch (e) { /* private window */ }
+  }
+  try { applyTheme(localStorage.getItem('monitor-theme') || 'auto'); } catch (e) { /* storage blocked */ }
+
+  // ---------------------------------------------------------------- events
+  app.addEventListener('click', function (event) {
+    var target = event.target.closest('button, tr[data-id], tr[data-run]');
+    if (!target) return;
+    if (target.hasAttribute('data-copy')) { copyText(target.getAttribute('data-copy'), target); return; }
+    if (target.hasAttribute('data-log')) {
+      var path = target.getAttribute('data-log');
+      state.openLogs[path] = !state.openLogs[path];
+      if (state.openLogs[path]) fetchLog(path);
+      render();
+      return;
+    }
+    if (target.hasAttribute('data-theme-pick')) { applyTheme(target.getAttribute('data-theme-pick')); render(); return; }
+    if (target.hasAttribute('data-claim')) { state.claimOpen = !state.claimOpen; render(); return; }
+    if (target.hasAttribute('data-act')) {
+      var act = target.getAttribute('data-act'), msg = document.getElementById('control-msg');
+      var picked = (document.querySelector('select[data-phase-pick]') || {}).value;
+      var questions = {
+        stop: 'The loop finishes its current phase or review, then stops. Evidence is kept. Write the STOP file?',
+        clear: 'Remove the STOP file so the next run can start?',
+        run: 'Start the phase runner for every phase not yet done? Each phase is a real model session.',
+        review: 'Start an independent review of phase ' + picked + "'s open PR? This runs the reviewer models.",
+        correct: 'Start one correction session for phase ' + picked + ' from its latest review? This runs a worker model on the branch.'
+      };
+      if (!window.confirm(questions[act])) return;
+      var call = act === 'stop' ? post('/api/stop') : act === 'clear' ? post('/api/stop/clear') :
+        post('/api/phases/launch', {command: act, phase: act === 'run' ? undefined : picked});
+      target.disabled = true;
+      call.then(function (j) {
+        if (msg) msg.textContent = act === 'stop' ? (j.created ? 'STOP written' : 'STOP was already there') : act === 'clear' ? (j.removed ? 'STOP removed' : 'no STOP file') : 'started (pid ' + j.pid + ')';
+        state.raw = ''; fetchState();
+      }).catch(function (e) { if (msg) msg.textContent = 'refused: ' + e.message; target.disabled = false; });
+      return;
+    }
+    if (target.hasAttribute('data-id')) { location.hash = 'packet=' + encodeURIComponent(target.getAttribute('data-id')); return; }
+    if (target.hasAttribute('data-run')) { location.href = batchHref(target.getAttribute('data-run')); }
+  });
+  window.addEventListener('hashchange', function () {
+    var wanted = packetFromHash();
+    if (wanted) { state.selected = wanted; state.claimOpen = false; }
+    render();
+  });
+  app.addEventListener('change', function (event) {
+    if (event.target.matches('select[data-batch]')) {
+      location.href = batchHref(event.target.value, onRunsPage() ? '/' : location.pathname);
+    }
+  });
+  app.addEventListener('keydown', function (event) {
+    if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('tr[data-id]')) {
+      event.preventDefault();
+      location.hash = 'packet=' + encodeURIComponent(event.target.getAttribute('data-id'));
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('tr[data-run]')) {
+      event.preventDefault();
+      location.href = batchHref(event.target.getAttribute('data-run'));
+    }
+  });
+
+  fetchState();
+  setInterval(fetchState, POLL_MS);
+})();
+</script>
+</body>
+</html>
