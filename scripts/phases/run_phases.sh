@@ -41,6 +41,8 @@ REVIEW_MODEL="${REVIEW_MODEL:-claude-opus-5-5}"
 ADVISORY_MODEL="${ADVISORY_MODEL:-gpt-5.6-sol}"
 ADVISORY_GATES="${ADVISORY_GATES:-0}"                    # 1: an advisory BLOCKING verdict also blocks
 MAX_CORRECTIONS="${MAX_CORRECTIONS:-2}"
+AUTO_MERGE="${AUTO_MERGE:-0}"                            # 1: every phase but the last merges itself once reviewed clean and CI is green
+CI_TIMEOUT="${CI_TIMEOUT:-1800}"
 ARBITER_MODEL="${ARBITER_MODEL:-}"                       # e.g. claude-fable-5-1: after MAX_CORRECTIONS, fixes it itself or hands it to the owner; empty = stop for the owner
 ARBITER_EFFORT="${ARBITER_EFFORT:-xhigh}"
 ARBITER_TIMEOUT="${ARBITER_TIMEOUT:-5400}"
@@ -238,6 +240,84 @@ $(head -c 1000 "$stem-decisions.md" 2>/dev/null)
   return 0
 }
 
+ci_state() {
+  # ci_state <pr> : pass, pending, none, or fail:<names> for the PR's head commit.
+  gh pr view "$1" -R "$GH_REPO" --json statusCheckRollup | python3 -c '
+import json, sys
+checks = json.load(sys.stdin).get("statusCheckRollup") or []
+bad, pending = [], False
+for c in checks:
+    name = c.get("name") or c.get("context") or "check"
+    if c.get("__typename") == "StatusContext" or "state" in c:
+        state = (c.get("state") or "").upper()
+        if state in ("PENDING", "EXPECTED", ""): pending = True
+        elif state != "SUCCESS": bad.append(name)
+    else:
+        if (c.get("status") or "").upper() != "COMPLETED": pending = True
+        elif (c.get("conclusion") or "").upper() not in ("SUCCESS", "SKIPPED", "NEUTRAL"): bad.append(name)
+print("fail:" + ", ".join(bad) if bad else "pending" if pending else "pass" if checks else "none")'
+}
+
+auto_merge() {
+  # auto_merge <n> : merge phase n's PR when CI is green on exactly the commit the reviewers passed, then confirm the
+  # phase's status row reads done on the base branch. Prints the reason and returns 1 when it does not merge.
+  local n=$1 pr head reviewed url waited=0 ci
+  pr=$(find_pr "$n")
+  [ -z "$pr" ] && { echo "no open PR"; return 1; }
+  url="https://github.com/$GH_REPO/pull/$pr"
+  head=$(gh pr view "$pr" -R "$GH_REPO" --json headRefOid --jq .headRefOid)
+  reviewed=$(cat "$LOG/phase-$n-reviewed-head" 2>/dev/null)
+  if [ -z "$head" ] || [ "$head" != "$reviewed" ]; then
+    echo "the PR's head ${head:0:7} is not the commit the reviewers passed (${reviewed:0:7})"; return 1
+  fi
+  while :; do
+    ci=$(ci_state "$pr")
+    case "$ci" in
+      pass) break ;;
+      fail:*) echo "CI failed on ${head:0:7}: ${ci#fail:}"; return 1 ;;
+    esac
+    [ "$waited" -ge "$CI_TIMEOUT" ] && { echo "CI still $ci on ${head:0:7} after $((CI_TIMEOUT / 60)) minutes"; return 1; }
+    sleep 20; waited=$((waited + 20))
+  done
+  if ! gh pr merge "$pr" -R "$GH_REPO" --merge --match-head-commit "$head" > /dev/null 2> "$LOG/phase-$n-merge.err"; then
+    echo "GitHub refused the merge: $(tail -1 "$LOG/phase-$n-merge.err")"; return 1
+  fi
+  log "MERGED phase $n PR #$pr at $head"
+  event merged phase="$n" pr="$pr" head="$head"
+  git -C "$REPO" fetch -q origin
+  if [ "$(status_of "$n" "origin/$BASE_BRANCH")" != "done" ]; then
+    echo "merged PR #$pr, but its row in $STATUS_FILE does not read done, so the runner would build it again; fix the row"; return 1
+  fi
+  local settled=""
+  if ls "$LOG/phase-$n-arbiter-attempt-"*-decisions.md > /dev/null 2>&1; then
+    settled="
+The arbiter fixed this phase; the rules it settled (check them in the phase's decisions box):
+\`\`\`
+$(head -c 900 "$(ls -t "$LOG/phase-$n-arbiter-attempt-"*-decisions.md | head -1)")
+\`\`\`"
+  fi
+  notify "✅ **$(basename "$LOG")** phase $n merged automatically (both reviews clean, CI green on ${head:0:7}). $url$settled"
+  return 0
+}
+
+finish_phase() {
+  # finish_phase <n> : phase n reviewed clean. With AUTO_MERGE=1 every phase but the last merges itself and the run
+  # goes on; the last phase of the task, or one that cannot merge cleanly, stops for the owner.
+  local n=$1 last reason
+  last=$(echo $PHASES | awk '{print $NF}')
+  if [ "$AUTO_MERGE" = 1 ] && [ "$n" != "$last" ]; then
+    if reason=$(auto_merge "$n"); then return 0; fi
+    log "STOP: phase $n reviewed clean but was not merged automatically: $reason; merge it, then rerun"
+    event stop phase="$n" reason="reviewed clean; not merged automatically: $reason; merge it, then rerun"; exit 2
+  fi
+  if [ "$n" = "$last" ] && [ "$AUTO_MERGE" = 1 ]; then
+    log "STOP: phase $n, the last of the task, reviewed clean; merge its PR to finish"
+    event stop phase="$n" reason="last phase reviewed clean; merge its PR to finish"; exit 2
+  fi
+  log "STOP: phase $n reviewed clean; merge its PR, then rerun"
+  event stop phase="$n" reason="reviewed clean; merge its PR, then rerun"; exit 2
+}
+
 verdict_in() { grep -q '^VERDICT: CLEAN' "$1" && echo CLEAN || { grep -q '^VERDICT: BLOCKING' "$1" && echo BLOCKING || echo UNKNOWN; }; }
 
 review_phase() {
@@ -248,6 +328,8 @@ review_phase() {
   pr=$(find_pr "$n")
   if [ -z "$pr" ]; then log "REVIEW phase $n round $round: no open PR found"; event review phase="$n" round="$round" note="no open PR found"; return 0; fi
   branch=$(gh pr view "$pr" -R "$GH_REPO" --json headRefName --jq .headRefName)
+  # The commit this review judges; auto-merge refuses any other head.
+  gh pr view "$pr" -R "$GH_REPO" --json headRefOid --jq .headRefOid > "$LOG/phase-$n-reviewed-head"
   base="$LOG/phase-$n-review-r$round"
   attempt=$(next_attempt "$base")
   local stem="$base-attempt-$attempt"
@@ -371,10 +453,7 @@ run_phase() {
   log "END phase $n exit=$code staging-status=${s:-unknown} :: $result"
   event end phase="$n" exit="$code" status="${s:-unknown}" attempt="$attempt" summary="${result:0:600}"
   review_until_clean "$n" "$file" "$model"
-  if [ "$s" != "done" ]; then
-    log "STOP: phase $n reviewed clean but its PR is open; merge it, then rerun"
-    event stop phase="$n" reason="reviewed clean; PR open; merge it, then rerun"; exit 2
-  fi
+  if [ "$s" != "done" ]; then finish_phase "$n"; fi  # merges and returns, or stops for the owner
 }
 
 cmd_run() {
@@ -396,8 +475,8 @@ cmd_review() {
   log "REVIEW-ONLY phase $n"
   event review_only phase="$n"
   review_until_clean "$n" "$file" "$(model_for "$file")"
-  log "STOP: phase $n reviewed clean; merge its PR, then rerun without REVIEW_ONLY"
-  event stop phase="$n" reason="reviewed clean; merge its PR, then rerun"
+  finish_phase "$n"
+  cmd_run  # merged: carry on with the phases still to do
 }
 
 cmd_correct() {
@@ -411,8 +490,8 @@ cmd_correct() {
   # A correction is always followed by a review, which corrects again within MAX_CORRECTIONS.
   check_stop "review after correction of phase $n"
   REVIEW_ROUND_START=$round review_until_clean "$n" "$file" "$(model_for "$file")"
-  log "STOP: phase $n reviewed clean; merge its PR, then rerun"
-  event stop phase="$n" reason="reviewed clean; merge its PR, then rerun"
+  finish_phase "$n"
+  cmd_run  # merged: carry on with the phases still to do
 }
 
 cmd_status() {

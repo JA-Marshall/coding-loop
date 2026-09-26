@@ -571,6 +571,24 @@ class PhaseRunTest(unittest.TestCase):
         self.assertIn("chose not to force a fix", doc["batch"]["needs_you"]["text"])
         self.assertIn("disagree on the data model", doc["batch"]["needs_you"]["text"])
 
+    def test_auto_merge_and_the_last_phase(self):
+        log = self.root / "coordinator.log"
+        log.write_text(log.read_text()
+                       + "2026-09-26T15:20:00+01:00 MERGED phase 02 PR #4 at abc1234def\n"
+                       + "2026-09-26T15:20:05+01:00 START phase 03 (/mnt/c/proof/docs/prompts/phase-03-landing-page.md)\n"
+                       + "2026-09-26T15:40:00+01:00 END phase 03 exit=0 staging-status=todo :: success | PR https://github.com/o/r/pull/5\n"
+                       + "2026-09-26T15:50:00+01:00 STOP: phase 03, the last of the task, reviewed clean; merge its PR to finish\n")
+        doc = collect(self.root, now=1_790_000_000.0)
+        self.assertEqual(doc["packets"][1]["status"], "merged")
+        self.assertEqual(doc["packets"][1]["phase_run"]["auto_merged"]["pr"], 4)
+        self.assertEqual(doc["batch"]["tone"], "yours")
+        self.assertIn("last of this task", doc["batch"]["needs_you"]["text"])
+        log.write_text(log.read_text().replace("STOP: phase 03, the last of the task, reviewed clean; merge its PR to finish",
+                                               "STOP: phase 03 reviewed clean but was not merged automatically: CI failed on abc1234: tests; merge it, then rerun"))
+        doc = collect(self.root, now=1_790_000_000.0)
+        self.assertEqual(doc["batch"]["tone"], "yours")
+        self.assertIn("did not merge itself: CI failed on abc1234: tests.", doc["batch"]["needs_you"]["text"])
+
     def test_an_open_correction_is_work_in_progress(self):
         log = self.root / "coordinator.log"
         log.write_text(log.read_text() + "2026-09-26T15:12:00+01:00 CORRECT phase 02 round 1 on phase-02-x (PR #4) model=m\n")
