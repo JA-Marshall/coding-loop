@@ -40,6 +40,7 @@ else:  # run as a plain script from any directory: python3 /path/to/scripts/moni
 PAGE = Path(__file__).with_name("index.html")
 PLANS_PAGE = Path(__file__).with_name("plans.html")
 LOG_TAIL_CHARS = 8000
+INPUT_HEAD_CHARS = 40000
 LOOPBACK_NAMES = {"localhost"}
 
 
@@ -183,7 +184,8 @@ def log_tail(directory, raw_path, limit=LOG_TAIL_CHARS):
         resolved = requested.resolve()
     except OSError:
         return HTTPStatus.FORBIDDEN, {"error": "path refused"}
-    if not any(resolved.is_relative_to(root) for root in roots) or resolved.suffix not in {".log", ".err"}:
+    session_input = resolved.name.endswith("-input.md")  # what a phase session was given; its start matters most
+    if not any(resolved.is_relative_to(root) for root in roots) or (resolved.suffix not in {".log", ".err"} and not session_input):
         return HTTPStatus.FORBIDDEN, {"error": "path refused: logs are served from inside the evidence directory only"}
     if not resolved.is_file():
         return HTTPStatus.NOT_FOUND, {"error": "no such log"}
@@ -191,6 +193,11 @@ def log_tail(directory, raw_path, limit=LOG_TAIL_CHARS):
         text = resolved.read_text(errors="replace")
     except OSError as exc:
         return HTTPStatus.NOT_FOUND, {"error": exc.strerror or str(exc)}
+    if session_input:
+        head = INPUT_HEAD_CHARS
+        return HTTPStatus.OK, {"path": str(resolved), "size": len(text), "truncated": len(text) > head,
+                               "tail": text[:head] + ("\n\n[... %d more characters; open the file for the rest]" % (len(text) - head) if len(text) > head else ""),
+                               "digest": None}
     return HTTPStatus.OK, {"path": str(resolved), "size": len(text), "truncated": len(text) > limit,
                            "tail": text[-limit:], "digest": log_digest(text)}
 

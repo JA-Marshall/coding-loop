@@ -812,6 +812,7 @@ DONE_LINE = re.compile(r"^phase (\d+) already done$")
 REVIEW_LINE = re.compile(r"^REVIEW(?:-ONLY)? phase (\d+)(?: round (\d+))?:? ?(.*)$")
 CORRECT_LINE = re.compile(r"^CORRECT phase (\d+) round (\d+) on (\S+) \(PR #(\d+)\) model=(\S+)$")
 CORRECTED_LINE = re.compile(r"^CORRECTED phase (\d+) round (\d+) exit=(\d+)$")
+INPUT_LINE = re.compile(r"^INPUT (build|review|fix|arbiter) phase (\d+) round (\d+) \((\S+)\): (.*)$")
 MERGED_LINE = re.compile(r"^MERGED phase (\d+) PR #(\d+) at (\S+)$")
 ARBITER_LINE = re.compile(r"^ARBITER phase (\d+) round (\d+)(?: on (\S+) \(PR #(\d+)\) model=(\S+).*|: (fixed and pushed|handed to the owner)[^:]*: ?(.*))$")
 REVIEW_TEXT_LIMIT = 20000
@@ -1211,6 +1212,20 @@ def collect_phases(directory, errors, now):
             ph["corrections"].append({"round": int(m2.group(2)), "branch": m2.group(3), "pr": int(m2.group(4)),
                                       "model": m2.group(5), "started": stamp, "finished": None, "exit_code": None})
             ph["segments"].append({"kind": "fix", "start": stamp, "end": None})
+            continue
+        m2 = INPUT_LINE.match(rest)
+        if m2:  # the receipt for what the session just started was given
+            ph = phase(m2.group(2))
+            item = {"file": str(directory / m2.group(4)), "receipt": m2.group(5), "at": stamp}
+            kind = m2.group(1)
+            if kind == "fix" and ph["corrections"]:
+                ph["corrections"][-1]["input"] = item
+            elif kind == "review" and ph["review"]:
+                ph["review"]["input"] = item
+            elif kind == "arbiter" and ph.get("arbiter"):
+                ph["arbiter"]["input"] = item
+            elif kind == "build":
+                ph["input"] = item
             continue
         m2 = MERGED_LINE.match(rest)
         if m2:  # the runner merged it itself

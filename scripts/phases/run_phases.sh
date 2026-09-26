@@ -186,6 +186,7 @@ arbitrate_phase() {
     echo; echo "===== PULL REQUEST #$pr ($branch -> $BASE_BRANCH) DIFF ====="; gh pr diff "$pr" -R "$GH_REPO"
     echo; echo "===== PHASE PROMPT ====="; cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
   log "ARBITER phase $n round $round on $branch (PR #$pr) model=$ARBITER_MODEL effort=$ARBITER_EFFORT"
+  receipt arbiter "$n" "$round" "$stem-input.md"
   event arbiter phase="$n" round="$round" pr="$pr" branch="$branch" model="$ARBITER_MODEL" attempt="$attempt"
   notify "⚖️ **$(basename "$LOG")** phase $n is still blocking after $MAX_CORRECTIONS fixes. $ARBITER_MODEL ($ARBITER_EFFORT) is looking at it: it will either fix it or hand it to you. $url"
   ( cd "$REPO" && timeout "$ARBITER_TIMEOUT" claude -p --strict-mcp-config --mcp-config "$WORKER_MCP" --model "$ARBITER_MODEL" --effort "$ARBITER_EFFORT" \
@@ -318,6 +319,41 @@ finish_phase() {
   event stop phase="$n" reason="reviewed clean; merge its PR, then rerun"; exit 2
 }
 
+receipt() {
+  # receipt <what> <n> <round> <input file> [note] : one line saying exactly what a session was given: each section's
+  # size, the finding IDs it carries and its verdict. Logged, evented and kept beside the input, so the owner can check
+  # that a fixer received the right findings. <what> is build, review, fix or arbiter.
+  local what=$1 n=$2 round=$3 file=$4 note=${5:-} line
+  line=$(python3 - "$file" <<'RECEIPT_PY'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+def size(s):
+    n = len(s.encode())
+    return "%.1f KB" % (n / 1024) if n >= 1024 else "%d B" % n
+def order(i):
+    p, k = i[1:].split("-")
+    return (int(p), int(k))
+parts = re.split(r"^===== (.+?) =====$", text, flags=re.M)
+out = ["instructions " + size(parts[0])]
+for title, body in zip(parts[1::2], parts[2::2]):
+    label = re.sub(r"\s*\(.*$", "", title).strip().lower()
+    item = label + " " + size(body)
+    ids = sorted(set(re.findall(r"\bP[0-3]-\d+\b", body)), key=order)
+    if ids and "diff" not in label and "prompt" not in label:
+        item += " [" + ",".join(ids) + "]"
+    verdict = re.findall(r"^VERDICT:\s*(\w+)", body, re.M)
+    if verdict:
+        item += " " + verdict[-1]
+    out.append(item)
+print(" · ".join(out))
+RECEIPT_PY
+)
+  [ -n "$note" ] && line="$line · $note"
+  echo "$line" > "${file%-input.md}-receipt.txt"
+  log "INPUT $what phase $n round $round ($(basename "$file")): $line"
+  event input phase="$n" round="$round" what="$what" file="$(basename "$file")" receipt="$line"
+}
+
 verdict_in() { grep -q '^VERDICT: CLEAN' "$1" && echo CLEAN || { grep -q '^VERDICT: BLOCKING' "$1" && echo BLOCKING || echo UNKNOWN; }; }
 
 review_phase() {
@@ -334,10 +370,18 @@ review_phase() {
   attempt=$(next_attempt "$base")
   local stem="$base-attempt-$attempt"
   { render "$PROMPT_DIR/review.md" SITE="$SITE" PR="$pr" BRANCH="$branch" BASE="$BASE_BRANCH" PHASE="$n" ROUND="$round"
+    # The last review's findings, so this one marks each ID FIXED or NOT FIXED instead of starting over.
+    if [ -s "$LOG/phase-$n-review-claude.md" ]; then
+      echo; echo "===== PREVIOUS REVIEW (Claude, the latest before this one) ====="; cat "$LOG/phase-$n-review-claude.md"
+    fi
+    if [ "$ADVISORY_GATES" = "1" ] && [ -s "$LOG/phase-$n-review-gpt.md" ]; then
+      echo; echo "===== PREVIOUS REVIEW (GPT, the latest before this one) ====="; cat "$LOG/phase-$n-review-gpt.md"
+    fi
     echo; echo "===== PULL REQUEST #$pr ($branch -> $BASE_BRANCH) DIFF ====="; gh pr diff "$pr" -R "$GH_REPO"
     echo; echo "===== PHASE PROMPT ====="; cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
   local bytes; bytes=$(wc -c < "$stem-input.md")
   log "REVIEW phase $n round $round: PR #$pr, $bytes bytes"
+  receipt review "$n" "$round" "$stem-input.md"
   event review phase="$n" round="$round" pr="$pr" bytes="$bytes" attempt="$attempt" branch="$branch"
   ( cd "$REPO" && timeout "$REVIEW_TIMEOUT" claude -p --restricted --strict-mcp-config --model "$REVIEW_MODEL" --effort high --permission-mode dontAsk \
       --tools Read,Grep,Glob --no-session-persistence --disable-slash-commands \
@@ -395,6 +439,11 @@ correct_phase() {
     fi
     echo; echo "===== PHASE PROMPT (for the contract; do not redo it) ====="; cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
   log "CORRECT phase $n round $round on $branch (PR #$pr) model=$model"
+  local gpt_note=""
+  if [ "$ADVISORY_GATES" != "1" ] && [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
+    gpt_note="GPT's blocking review left out (advisory only)"
+  fi
+  receipt fix "$n" "$round" "$stem-input.md" "$gpt_note"
   event correct phase="$n" round="$round" pr="$pr" branch="$branch" model="$model" attempt="$attempt"
   ( cd "$REPO" && timeout "$CORRECT_TIMEOUT" claude -p --strict-mcp-config --mcp-config "$WORKER_MCP" --model "$model" --permission-mode auto --output-format json \
       < "$stem-input.md" > "$stem.json" 2> "$stem.err" )
@@ -443,6 +492,7 @@ run_phase() {
   event start phase="$n" prompt="$file" model="$model" attempt="$attempt"
   point_latest "$LOG/phase-$n.json" "$stem.json"; point_latest "$LOG/phase-$n.err" "$stem.err"
   { cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
+  receipt build "$n" 0 "$stem-input.md"
   ( cd "$REPO" && timeout "$PHASE_TIMEOUT" claude -p --strict-mcp-config --mcp-config "$WORKER_MCP" --model "$model" --permission-mode auto --output-format json \
       < "$stem-input.md" > "$stem.json" 2> "$stem.err" )
   local code=$?
