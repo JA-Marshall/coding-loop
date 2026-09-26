@@ -812,6 +812,7 @@ DONE_LINE = re.compile(r"^phase (\d+) already done$")
 REVIEW_LINE = re.compile(r"^REVIEW(?:-ONLY)? phase (\d+)(?: round (\d+))?:? ?(.*)$")
 CORRECT_LINE = re.compile(r"^CORRECT phase (\d+) round (\d+) on (\S+) \(PR #(\d+)\) model=(\S+)$")
 CORRECTED_LINE = re.compile(r"^CORRECTED phase (\d+) round (\d+) exit=(\d+)$")
+MERGED_LINE = re.compile(r"^MERGED phase (\d+) PR #(\d+) at (\S+)$")
 ARBITER_LINE = re.compile(r"^ARBITER phase (\d+) round (\d+)(?: on (\S+) \(PR #(\d+)\) model=(\S+).*|: (fixed and pushed|handed to the owner)[^:]*: ?(.*))$")
 REVIEW_TEXT_LIMIT = 20000
 
@@ -1211,6 +1212,11 @@ def collect_phases(directory, errors, now):
                                       "model": m2.group(5), "started": stamp, "finished": None, "exit_code": None})
             ph["segments"].append({"kind": "fix", "start": stamp, "end": None})
             continue
+        m2 = MERGED_LINE.match(rest)
+        if m2:  # the runner merged it itself
+            ph = phase(m2.group(1))
+            ph.update(status="merged", staging_status="done", auto_merged={"pr": int(m2.group(2)), "head": m2.group(3), "at": stamp})
+            continue
         m2 = ARBITER_LINE.match(rest)
         if m2:
             stop = None
@@ -1447,7 +1453,14 @@ def needs_you(batch, packets):
         pr = (last or {}).get("pr")
         rv = ((last or {}).get("phase_run") or {}).get("review") or {}
         if phase == "STOPPED" and ("merge its PR" in reason or "merge it, then" in reason):
-            text = "Phase " + (last["id"].replace("phase-", "") if last else "?") + " is reviewed clean and its PR waits for your merge. Merge it, then press Run."
+            number = last["id"].replace("phase-", "") if last else "?"
+            if "last phase" in reason or "the last of the task" in reason:
+                text = "Phase " + number + ", the last of this task, is reviewed clean. Merge its PR to finish the task."
+            elif "not merged automatically" in reason:
+                why = reason.split("not merged automatically:", 1)[1].rsplit("; merge it", 1)[0].strip()
+                text = "Phase " + number + " is reviewed clean but did not merge itself: " + why + ". Sort that out and merge it, then press Run."
+            else:
+                text = "Phase " + number + " is reviewed clean and its PR waits for your merge. Merge it, then press Run."
             if rv.get("advisory") == "BLOCKING":
                 text += " The GPT advisory review flagged a blocking finding; read it before merging."
             return {"kind": "merge", "text": text, "pr": pr, "phase": last["id"] if last else None}
