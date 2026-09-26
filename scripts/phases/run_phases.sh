@@ -343,8 +343,8 @@ review_phase() {
       --tools Read,Grep,Glob --no-session-persistence --disable-slash-commands \
       < "$stem-input.md" > "$stem-claude.md" 2> "$stem-claude.err" )
   local claude_code=$?
-  local advisory_note="GPT advisory review: codex not installed." advisory=UNKNOWN
-  if command -v codex >/dev/null; then
+  local advisory_note="GPT advisory review: turned off or codex not installed." advisory=UNKNOWN
+  if [ -n "$ADVISORY_MODEL" ] && command -v codex >/dev/null; then  # ADVISORY_MODEL= (empty) turns the GPT review off
     ( cd "$REPO" && timeout "$REVIEW_TIMEOUT" codex exec --sandbox read-only --model "$ADVISORY_MODEL" -c 'model_reasoning_effort="high"' \
         --ephemeral -o "$stem-gpt.md" - < "$stem-input.md" > "$stem-gpt.err" 2>&1 )
     if [ -s "$stem-gpt.md" ]; then advisory_note="$(cat "$stem-gpt.md")"; advisory=$(verdict_in "$stem-gpt.md")
