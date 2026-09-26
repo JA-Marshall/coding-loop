@@ -534,6 +534,23 @@ class PhaseRunTest(unittest.TestCase):
         self.assertEqual(doc["batch"]["needs_you"]["kind"], "inspect")
         self.assertIn("died", doc["batch"]["needs_you"]["text"])
 
+    def test_every_stretch_of_work_is_a_timeline_segment(self):
+        log = self.root / "coordinator.log"
+        log.write_text(log.read_text()
+                       + "2026-09-26T15:11:00+01:00 REVIEW phase 02 round 0: PR #4, 900 bytes\n"
+                       + "2026-09-26T15:13:00+01:00 REVIEW phase 02 round 0: verdict BLOCKING (advisory CLEAN), posted to PR #4\n"
+                       + "2026-09-26T15:13:02+01:00 CORRECT phase 02 round 1 on phase-02-x (PR #4) model=m\n"
+                       + "2026-09-26T15:16:00+01:00 CORRECTED phase 02 round 1 exit=0\n"
+                       + "2026-09-26T15:16:01+01:00 REVIEW phase 02 round 1: PR #4, 950 bytes\n")
+        segs = collect(self.root, now=1_790_000_000.0)["packets"][1]["phase_run"]["segments"]
+        self.assertEqual([s["kind"] for s in segs], ["build", "review", "fix", "review"])
+        self.assertTrue(all(s["end"] is not None for s in segs[:3]))
+        self.assertIsNone(segs[3]["end"], "the review in progress runs to now")
+        self.lock.close()
+        self.module._HOLDERS_CACHE.clear()
+        segs = collect(self.root, now=1_790_000_000.0)["packets"][1]["phase_run"]["segments"]
+        self.assertIsNotNone(segs[3]["end"], "a dead runner's open segment ends when it died")
+
     def test_an_open_correction_is_work_in_progress(self):
         log = self.root / "coordinator.log"
         log.write_text(log.read_text() + "2026-09-26T15:12:00+01:00 CORRECT phase 02 round 1 on phase-02-x (PR #4) model=m\n")

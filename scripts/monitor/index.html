@@ -664,9 +664,25 @@ footer.note a{color:var(--running)}
       else if (p.status === 'running') label += ' · ' + (p.phase || p.batch_phase || 'running');
       else if (p.status === 'stopped') label += p.tone === 'yours' ? ' · your turn' : p.tone === 'working' ? ' · reviewing' : ' · STOPPED';
       else if (p.status === 'reviewed') label += ' · LOCAL_REVIEWED';
-      if (p.corrections) label += ' · ' + plural(p.corrections, 'correction');
-      svg.push('<rect x="' + start.toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) + '" height="16" rx="2" fill="' + fill + '" stroke="' + stroke + '"/>');
-      if (w > 30) svg.push('<text x="' + (start + 5).toFixed(1) + '" y="' + (y + 11.5) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">' + h(label) + '</text>');
+      if (p.corrections) label += ' · ' + plural(p.corrections, p.phase_run ? 'fix' : 'correction').replace('fixs', 'fixes');
+      var segs = p.phase_run && p.phase_run.segments && p.phase_run.segments.length ? p.phase_run.segments : null;
+      if (segs) {
+        // Every stretch of work on its own: builds and fixes solid, reviews dashed, joined by a thin line.
+        var first = x(segs[0].start), last = x(segs[segs.length - 1].end != null ? segs[segs.length - 1].end : end), fixN = 0;
+        svg.push('<line x1="' + first.toFixed(1) + '" y1="' + (y + 8) + '" x2="' + last.toFixed(1) + '" y2="' + (y + 8) + '" stroke="' + stroke + '" stroke-width="1" opacity=".5"/>');
+        segs.forEach(function (s, k) {
+          var sx = x(s.start), sw = Math.max(x(s.end != null ? s.end : end) - sx, 3);
+          var name = s.kind === 'fix' ? 'fix ' + (++fixN) : s.kind;
+          var when = clock(s.start) + (s.end != null ? '–' + clock(s.end) : ' → now');
+          svg.push('<rect x="' + sx.toFixed(1) + '" y="' + y + '" width="' + sw.toFixed(1) + '" height="16" rx="2" fill="' + (s.kind === 'review' ? 'var(--panel)' : fill) + '" stroke="' + stroke + '"' + (s.kind === 'review' ? ' stroke-dasharray="3 2"' : '') + '><title>' + h(name + ' ' + when) + '</title></rect>');
+          var text = k === 0 ? label : name;
+          if (sw > text.length * 6.2 + 8) svg.push('<text x="' + (sx + 4).toFixed(1) + '" y="' + (y + 11.5) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">' + h(text) + '</text>');
+        });
+        if (x(segs[0].end != null ? segs[0].end : end) - first <= label.length * 6.2 + 8) svg.push('<text x="' + first.toFixed(1) + '" y="' + (y - 3) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">' + h(label) + '</text>');
+      } else {
+        svg.push('<rect x="' + start.toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) + '" height="16" rx="2" fill="' + fill + '" stroke="' + stroke + '"/>');
+        if (w > 30) svg.push('<text x="' + (start + 5).toFixed(1) + '" y="' + (y + 11.5) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">' + h(label) + '</text>');
+      }
       var calls = (p.runner && p.runner.call_list) || [];
       svg.push('<g fill="var(--fg)" opacity=".7">');
       calls.forEach(function (c) { if (c.at != null) svg.push('<rect x="' + (x(c.at) - 1).toFixed(1) + '" y="' + (y + 19) + '" width="2" height="7"/>'); });
@@ -686,7 +702,7 @@ footer.note a{color:var(--running)}
       }
     }
     var aria = 'Timeline from ' + clock(t0) + ' to the ' + clock(t1) + ' deadline. ' + (summary.join('. ') || 'No packet has started.') + '. Now ' + clock(end) + '.';
-    var tapeCaption = noDeadline ? h(clock(t0)) + ' to ' + h(clock(end)) + ' · one bar per phase session' : h(clock(t0)) + ' to the ' + h(clock(t1)) + ' deadline · each tick is one model call';
+    var tapeCaption = noDeadline ? h(clock(t0)) + ' to ' + h(clock(end)) + ' · one row per phase: builds, reviews and fixes' : h(clock(t0)) + ' to the ' + h(clock(t1)) + ' deadline · each tick is one model call';
     return '<figure class="panel tape" aria-label="Timeline"><header><h2>Tonight</h2><span class="muted">' +
       tapeCaption + (dayOf(t0) !== dayOf(now) ? ' · started ' + h(dayOf(t0)) : '') + '</span></header>' +
       '<div class="scroll"><svg viewBox="0 0 1000 ' + height + '" role="img" aria-label="' + h(aria) + '">' + svg.join('') + '</svg></div>' +
@@ -694,7 +710,7 @@ footer.note a{color:var(--running)}
       '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>running</span>' +
       '<span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>waiting for you</span>' +
       '<span><i style="background:var(--failed-soft);border:1px solid var(--failed)"></i>broke</span>' +
-      '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>' +
+      (b.mode === 'phases' ? '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>build or fix</span><span><i style="border:1px dashed var(--running)"></i>review</span>' : '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>') +
       '<span><i style="background:var(--sunken);border:1px solid var(--hair)"></i>not yet</span></div>' +
       '<figcaption>' + (b.mode === 'phases' ? 'Times come from the coordinator log\'s own timestamps.' : 'Times come from file modification times until the event log ships, so treat them as approximate to a minute.') + '</figcaption></figure>';
   }
@@ -906,10 +922,10 @@ footer.note a{color:var(--running)}
       (r.summary ? '<p>' + h(r.summary) + '</p><p class="muted" style="font-size:11.5px">The END line keeps the last 600 characters of the session\'s final message.</p>' : '<span class="muted">No END line yet.</span>') + errBody + '</div></div>';
     var corrections = '';
     if (r.corrections && r.corrections.length) {
-      corrections = '<div style="display:grid;gap:6px"><h3>Correction rounds</h3>' + r.corrections.map(function (c) {
+      corrections = '<div style="display:grid;gap:6px"><h3>Fixes after review</h3>' + r.corrections.map(function (c, ci) {
         var pill = c.exit_code === 0 ? '<span class="pill verified">exit 0</span>' : typeof c.exit_code === 'number' ? '<span class="pill failed">exit ' + c.exit_code + '</span>' : '<span class="pill running">running</span>';
         var took = c.started != null && c.finished != null ? clock(c.started) + '–' + clock(c.finished) : c.started != null ? 'since ' + clock(c.started) : '?';
-        return '<div class="check">' + pill + '<span class="mono">round ' + c.round + ' · ' + h(c.model) + ' · ' + h(took) + '</span><span class="muted">on ' + h(c.branch) + ' · PR #' + c.pr + '</span></div>';
+        return '<div class="check">' + pill + '<span class="mono">fix ' + (ci + 1) + ' · ' + h(took) + ' · ' + h(c.model) + '</span><span class="muted">on ' + h(c.branch) + ' · PR #' + c.pr + '</span></div>';
       }).join('') + '</div>';
     }
     var review = '';
