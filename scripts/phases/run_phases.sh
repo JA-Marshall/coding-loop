@@ -206,7 +206,7 @@ correct_phase() {
 
 review_until_clean() {
   # review_until_clean <n> <file> <model> : review, correct, review... within MAX_CORRECTIONS. Exit codes end the loop.
-  local n=$1 file=$2 model=$3 round=0
+  local n=$1 file=$2 model=$3 round=${REVIEW_ROUND_START:-0}
   until review_phase "$n" "$file" "$round"; do
     round=$((round + 1))
     if [ "$round" -gt "$MAX_CORRECTIONS" ]; then
@@ -278,7 +278,12 @@ cmd_correct() {
   [ -s "$LOG/phase-$n-review-claude.md" ] || { echo "no review of phase $n to correct from" >&2; exit 1; }
   check_stop "correction of phase $n"
   local round; round=$(( $(ls "$LOG"/phase-"$n"-correct-r*-attempt-*.json 2>/dev/null | sed 's/.*-r\([0-9]*\)-attempt.*/\1/' | sort -n | tail -1) + 1 ))
-  correct_phase "$n" "$file" "$round" "$(model_for "$file")"
+  correct_phase "$n" "$file" "$round" "$(model_for "$file")" || { log "STOP: correction round $round failed"; event stop phase="$n" round="$round" reason="correction round failed"; exit 3; }
+  # A correction is always followed by a review, which corrects again within MAX_CORRECTIONS.
+  check_stop "review after correction of phase $n"
+  REVIEW_ROUND_START=$round review_until_clean "$n" "$file" "$(model_for "$file")"
+  log "STOP: phase $n reviewed clean; merge its PR, then rerun"
+  event stop phase="$n" reason="reviewed clean; merge its PR, then rerun"
 }
 
 cmd_status() {
