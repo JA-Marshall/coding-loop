@@ -121,6 +121,15 @@ find_pr() {
     --jq ".[] | select(.headRefName | startswith(\"$BRANCH_PREFIX$1-\")) | .number" | head -1
 }
 
+owner_decisions() {
+  # owner_decisions <n> : the owner's decisions for phase n, if $LOG/phase-NN-owner.md exists. They go into the
+  # build, every review and every correction, and they are final: they settle what the prompt or a reviewer left open.
+  local f="$LOG/phase-$1-owner.md"
+  [ -s "$f" ] || return 0
+  echo; echo "===== OWNER DECISIONS FOR PHASE $1 (final: they override the phase prompt, and a reviewer must not flag what they settle) ====="
+  cat "$f"
+}
+
 verdict_in() { grep -q '^VERDICT: CLEAN' "$1" && echo CLEAN || { grep -q '^VERDICT: BLOCKING' "$1" && echo BLOCKING || echo UNKNOWN; }; }
 
 review_phase() {
@@ -136,7 +145,7 @@ review_phase() {
   local stem="$base-attempt-$attempt"
   { render "$PROMPT_DIR/review.md" SITE="$SITE" PR="$pr" BRANCH="$branch" BASE="$BASE_BRANCH" PHASE="$n" ROUND="$round"
     echo; echo "===== PULL REQUEST #$pr ($branch -> $BASE_BRANCH) DIFF ====="; gh pr diff "$pr" -R "$GH_REPO"
-    echo; echo "===== PHASE PROMPT ====="; cat "$file"; } > "$stem-input.md"
+    echo; echo "===== PHASE PROMPT ====="; cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
   local bytes; bytes=$(wc -c < "$stem-input.md")
   log "REVIEW phase $n round $round: PR #$pr, $bytes bytes"
   event review phase="$n" round="$round" pr="$pr" bytes="$bytes" attempt="$attempt" branch="$branch"
@@ -194,7 +203,7 @@ correct_phase() {
     if [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
       echo; echo "===== ADVISORY REVIEW FINDINGS (GPT, round $((round - 1))) ====="; cat "$LOG/phase-$n-review-gpt.md"
     fi
-    echo; echo "===== PHASE PROMPT (for the contract; do not redo it) ====="; cat "$file"; } > "$stem-input.md"
+    echo; echo "===== PHASE PROMPT (for the contract; do not redo it) ====="; cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
   log "CORRECT phase $n round $round on $branch (PR #$pr) model=$model"
   event correct phase="$n" round="$round" pr="$pr" branch="$branch" model="$model" attempt="$attempt"
   ( cd "$REPO" && timeout "$CORRECT_TIMEOUT" claude -p --strict-mcp-config --mcp-config "$WORKER_MCP" --model "$model" --permission-mode auto --output-format json \
@@ -236,8 +245,9 @@ run_phase() {
   log "START phase $n ($file) model=$model"
   event start phase="$n" prompt="$file" model="$model" attempt="$attempt"
   point_latest "$LOG/phase-$n.json" "$stem.json"; point_latest "$LOG/phase-$n.err" "$stem.err"
+  { cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
   ( cd "$REPO" && timeout "$PHASE_TIMEOUT" claude -p --strict-mcp-config --mcp-config "$WORKER_MCP" --model "$model" --permission-mode auto --output-format json \
-      < "$file" > "$stem.json" 2> "$stem.err" )
+      < "$stem-input.md" > "$stem.json" 2> "$stem.err" )
   local code=$?
   git -C "$REPO" fetch -q origin
   s=$(status_of "$n" "origin/$BASE_BRANCH")
