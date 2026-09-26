@@ -1,6 +1,7 @@
 """collect() against examples/smoke-run and synthetic batch trees. No writes, ever."""
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import stat
@@ -656,6 +657,83 @@ class PhaseRunTest(unittest.TestCase):
         self.assertEqual(doc["packets"][0]["status"], "running")
         self.assertAlmostEqual(doc["packets"][0]["elapsed_s"], 600, delta=1)
         self.assertEqual(doc["batch"]["alive"]["expected_s"], 10800)
+
+
+def transcript_lines(prompt, sizes, sidechain=None):
+    """A Claude Code transcript: the prompt as the first user message, then one assistant turn per size."""
+    lines = [{"type": "queue-operation"}, {"type": "user", "message": {"role": "user", "content": prompt}}]
+    for n, size in enumerate(sizes):
+        usage = {"input_tokens": 10, "cache_read_input_tokens": size - 110, "cache_creation_input_tokens": 100, "output_tokens": 5}
+        # Claude Code writes one line per content block, each repeating the message's usage.
+        lines += [{"type": "assistant", "message": {"id": "msg_%d" % n, "usage": usage}}] * 2
+    if sidechain:
+        lines.append({"type": "assistant", "isSidechain": True, "message": {"id": "msg_side", "usage": {"input_tokens": sidechain}}})
+    return "".join(json.dumps(line) + "\n" for line in lines)
+
+
+class ContextWindowTest(unittest.TestCase):
+    """Peak context comes from the session transcript, not from the summed usage."""
+
+    def setUp(self):
+        import scripts.monitor.collect as collect_module
+        self.module = collect_module
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.saved = collect_module.CLAUDE_PROJECTS
+        collect_module.CLAUDE_PROJECTS = base / "projects"
+        collect_module._CONTEXT_CACHE.clear()
+        collect_module._TRANSCRIPT_CACHE.clear()
+        self.repo = base / "repo"
+        (self.repo / ".git").mkdir(parents=True)
+        (self.repo / "docs").mkdir()
+        self.prompt = self.repo / "docs" / "phase-01-a.md"
+        self.prompt.write_text("# Phase 01: A\n\nDo it.\n")
+        self.folder = collect_module.CLAUDE_PROJECTS / re.sub(r"[^A-Za-z0-9]", "-", str(self.repo))
+        self.folder.mkdir(parents=True)
+        self.root = base / "run"
+        self.root.mkdir()
+        (self.root / "run_phases.sh").write_text("#!/usr/bin/env bash\nfor n in 01; do\n  echo\ndone\n")
+
+    def tearDown(self):
+        self.module.CLAUDE_PROJECTS = self.saved
+        self.module._CONTEXT_CACHE.clear()
+        self.module._TRANSCRIPT_CACHE.clear()
+        self.tmp.cleanup()
+
+    def test_finished_phase_reports_peak_of_its_session(self):
+        session = "0275348d-1377-4541-8c30-195b7a9181a8"
+        (self.folder / (session + ".jsonl")).write_text(transcript_lines("# Phase 01: A", [1000, 5000, 3000], sidechain=900000))
+        (self.root / "coordinator.log").write_text(
+            "2026-09-26T22:33:23+01:00 START phase 01 (" + str(self.prompt) + ")\n"
+            "2026-09-26T22:43:14+01:00 END phase 01 exit=0 staging-status=todo :: success | done\n")
+        (self.root / "phase-01.json").write_text(json.dumps({"subtype": "success", "session_id": session, "usage": {},
+            "modelUsage": {"claude-opus-5-5": {"contextWindow": 1000000}}}) + "\n")
+        context = collect(self.root)["packets"][0]["phase_run"]["context"]
+        self.assertEqual(context, {"peak": 5000, "last": 3000, "turns": 3, "window": 1000000, "live": False})
+
+    def test_running_phase_reads_the_live_transcript_incrementally(self):
+        (self.root / "coordinator.log").write_text("2026-09-26T22:33:23+01:00 START phase 01 (" + str(self.prompt) + ")\n")
+        (self.root / "phase-01.json").write_text("")
+        (self.folder / "other.jsonl").write_text(transcript_lines("# Something else", [90000]))
+        live = self.folder / "live.jsonl"
+        live.write_text(transcript_lines("# Phase 01: A", [2000]) + '{"type": "assistant", "message": {"id": "half')
+        started = collect(self.root)["packets"][0]["started"]
+        for path in (live, self.folder / "other.jsonl"):
+            os.utime(path, (started + 60, started + 60))
+        context = collect(self.root, now=started + 120)["packets"][0]["phase_run"]["context"]
+        self.assertEqual((context["peak"], context["last"], context["turns"], context["live"]), (2000, 2000, 1, True))
+        self.assertIsNone(context["window"])
+        with open(live, "a") as fh:  # the half-written line completes, and another turn arrives
+            fh.write('_x", "usage": {"input_tokens": 7000}}}\n'
+                     + json.dumps({"type": "assistant", "message": {"id": "msg_new", "usage": {"input_tokens": 4000}}}) + "\n")
+        os.utime(live, (started + 90, started + 90))
+        context = collect(self.root, now=started + 120)["packets"][0]["phase_run"]["context"]
+        self.assertEqual((context["peak"], context["last"], context["turns"]), (7000, 4000, 3))
+
+    def test_no_transcript_means_unknown(self):
+        (self.root / "coordinator.log").write_text("2026-09-26T22:33:23+01:00 START phase 01 (" + str(self.prompt) + ")\n")
+        (self.root / "phase-01.json").write_text("")
+        self.assertIsNone(collect(self.root)["packets"][0]["phase_run"]["context"])
 
 
 class EmptyAndErrorStateTest(unittest.TestCase):

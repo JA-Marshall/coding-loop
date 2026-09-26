@@ -789,6 +789,14 @@ footer.note a{color:var(--running)}
     return out.join('');
   }
 
+  // Peak context from the session's transcript: the fullest single turn, not a sum.
+  function contextText(c) {
+    if (!c) return unknown();
+    var pct = c.window ? Math.round(100 * c.peak / c.window) : null;
+    return 'peak ' + num(c.peak) + (c.window ? ' of ' + num(c.window) + ' (' + pct + '%)' : '') +
+      ' <span class="muted">' + (c.live ? 'now ' + num(c.last) + ' · live · ' : '') + plural(c.turns, 'turn') + '</span>';
+  }
+
   function renderPhaseDetail(doc, p) {
     var r = p.phase_run, res = r.result || {}, t = res.tokens;
     var head = '<header><h2>' + h(p.id) + ' · ' + h(p.title) + '</h2><span class="muted">' + (res.model ? 'model ' + h(res.model) : 'model unknown') + (res.session ? ' · session <span class="mono">' + h(res.session.slice(0, 8)) + '</span>' : '') + '</span></header>';
@@ -805,6 +813,7 @@ footer.note a{color:var(--running)}
       '<dt>Started</dt><dd>' + (r.started != null ? h(clock(r.started)) : '?') + (r.finished != null ? ' · ended ' + h(clock(r.finished)) : '') + (r.attempts > 1 ? ' · ' + plural(r.attempts, 'attempt') : '') + '</dd>' +
       '<dt>Tokens</dt><dd>' + (t ? num(t.input + t.output) + ' <span class="muted">in ' + num(t.input) + ' (' + num(t.cached) + ' cached) · out ' + num(t.output) + (t.thinking != null ? ' · thinking ' + num(t.thinking) : '') + '</span>' : unknown()) + '</dd>' +
       '<dt>Cost</dt><dd>' + (res.cost_usd != null ? '$' + h(res.cost_usd.toFixed(2)) : unknown()) + '</dd>' +
+      '<dt>Context</dt><dd>' + contextText(r.context) + '</dd>' +
       (r.prompt ? '<dt>Prompt</dt><dd class="path"><code>' + h(r.prompt) + '</code><button type="button" data-copy="' + h(r.prompt) + '">copy path</button></dd>' : '') +
       (r.output ? '<dt>Output</dt><dd class="path"><code>' + h(r.output) + '</code><button type="button" data-copy="' + h(r.output) + '">copy path</button></dd>' : '') +
       (r.stderr ? '<dt>Stderr</dt><dd>' + (r.stderr_bytes ? '<button type="button" data-log="' + h(r.stderr) + '">' + (state.openLogs[r.stderr] ? 'hide' : 'show') + ' ' + num(r.stderr_bytes) + ' bytes</button>' : '<span class="muted">empty</span>') + '</dd>' : '') +
