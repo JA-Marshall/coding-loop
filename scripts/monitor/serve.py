@@ -21,7 +21,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -273,6 +275,103 @@ def launch_phases(target, command, phase=None):
     return HTTPStatus.OK, {"pid": proc.pid, "argv": argv, "log": str(out)}
 
 
+# ---------------------------------------------------------------- notifications
+# The monitor already knows when a run is waiting for a human. Posting that to
+# a webhook on the transition, and only then, covers both loops and abandoned
+# runs without touching the hashed coordination code. The webhook lives in a
+# private file, never in the repository.
+
+NOTIFY_ENV = Path("~/.config/coding-loop/notify.env").expanduser()
+NOTIFY_STATE = Path("~/.config/coding-loop/notify-state.json").expanduser()
+NOTIFY_EVERY_S = 30
+
+
+def read_webhook(path=NOTIFY_ENV):
+    env = os.environ.get("NOTIFY_WEBHOOK")
+    if env:
+        return env
+    try:
+        for line in Path(path).read_text().splitlines():
+            if line.startswith("NOTIFY_WEBHOOK="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+    except OSError:
+        return None
+    return None
+
+
+def post_webhook(url, text):
+    body = json.dumps({"content": text[:1900]}).encode()
+    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "User-Agent": "coding-loop-monitor"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.status
+
+
+def notification_text(batch_id, doc, page_url):
+    batch = doc.get("batch") or {}
+    need = batch.get("needs_you")
+    if need:
+        line = "**" + batch_id + "** needs you: " + need["text"]
+        pr = need.get("pr") or {}
+        if pr.get("url"):
+            line += " " + pr["url"]
+    elif batch.get("phase") == "COMPLETE":
+        line = "**" + batch_id + "** finished: every phase done."
+    else:
+        return None
+    return line + "\n" + page_url + "?batch=" + batch_id
+
+
+class Notifier:
+    """Watches every run; posts once per change of what is waiting on the operator."""
+
+    def __init__(self, server, webhook, page_url, state_path=NOTIFY_STATE, poster=post_webhook, collector=collect):
+        self.server, self.webhook, self.page_url, self.state_path = server, webhook, page_url, Path(state_path)
+        self.poster, self.collector = poster, collector
+        try:
+            self.seen = json.loads(self.state_path.read_text())
+        except (OSError, ValueError):
+            self.seen = None  # first ever pass: record silently, announce nothing old
+
+    def snapshot(self):
+        current = {}
+        for entry in self.server.batches():
+            try:
+                doc = self.collector(entry["path"])
+            except Exception:  # noqa: BLE001 - one bad run must not stop the others
+                continue
+            text = notification_text(entry["id"], doc, self.page_url)
+            current[entry["id"]] = text
+        return current
+
+    def pass_once(self):
+        current = self.snapshot()
+        sent = []
+        if self.seen is not None:
+            for batch_id, text in current.items():
+                if text and text != self.seen.get(batch_id):
+                    try:
+                        self.poster(self.webhook, text)
+                        sent.append(batch_id)
+                    except Exception as exc:  # noqa: BLE001 - never let a webhook failure stop the monitor
+                        sys.stderr.write("notify failed for %s: %s\n" % (batch_id, exc))
+                        current[batch_id] = self.seen.get(batch_id)  # retry next pass
+        self.seen = current
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            self.state_path.write_text(json.dumps(current, indent=1))
+        except OSError:
+            pass
+        return sent
+
+    def run(self, every=NOTIFY_EVERY_S):
+        while True:
+            try:
+                self.pass_once()
+            except Exception as exc:  # noqa: BLE001
+                sys.stderr.write("notifier pass failed: %s\n" % exc)
+            time.sleep(every)
+
+
 class MonitorHandler(BaseHTTPRequestHandler):
     server_version = "coding-loop-monitor/0.1"
     directory = None  # set on the server class per instance
@@ -450,6 +549,7 @@ def main(argv=None):
     parser.add_argument("--host", default="127.0.0.1", help="loopback only; any other address is refused")
     parser.add_argument("--checkout", type=Path, default=None,
                         help="repository whose docs/plans the plan board reads; defaults to the batch manifest's checkout")
+    parser.add_argument("--no-notify", action="store_true", help="do not post to the webhook in ~/.config/coding-loop/notify.env")
     args = parser.parse_args(argv)
     try:
         server = make_server(args.directory, args.host, args.port, args.checkout)
@@ -467,6 +567,13 @@ def main(argv=None):
     elif not found:
         print("No state.json found under that directory; the page will say so.")
     print("Plans:   http://%s:%s/plans  (checkout: %s)" % (host, port, server.checkout or "none; pass --checkout"))
+    webhook = None if args.no_notify else read_webhook()
+    if webhook:
+        notifier = Notifier(server, webhook, "http://%s:%s/" % (host, port))
+        threading.Thread(target=notifier.run, daemon=True, name="notifier").start()
+        print("Notify:  posting to the webhook in %s when a run needs a decision" % NOTIFY_ENV)
+    else:
+        print("Notify:  off (no webhook in %s)" % NOTIFY_ENV)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

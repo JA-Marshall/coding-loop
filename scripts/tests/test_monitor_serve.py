@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import re
 import time
 from urllib.request import Request
 from pathlib import Path
@@ -15,7 +16,7 @@ from urllib.parse import quote
 from urllib.request import urlopen
 
 from scripts.monitor import serve
-from scripts.monitor.serve import discover_batches, log_tail, make_server, validate_host
+from scripts.monitor.serve import Notifier, discover_batches, log_tail, make_server, notification_text, read_webhook, validate_host
 
 REPO = Path(__file__).resolve().parents[2]
 SMOKE = REPO / "examples" / "smoke-run"
@@ -322,6 +323,79 @@ class ControlsTest(unittest.TestCase):
         doc = json.loads(urlopen(self.base + "/api/state?batch=proof-hardware-phases").read())
         self.assertEqual(doc["control"]["phases"], True)
         self.assertIn("locked", doc["control"])
+
+
+class NotifierTest(unittest.TestCase):
+    def setUp(self):
+        from scripts.tests.test_monitor_collect import build_phase_run
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / "runs"
+        self.phases = self.root / "proof-hardware-phases"
+        build_phase_run(self.phases)  # stopped: "phase 02 is not done on staging"
+        self.server = make_server(self.root, "127.0.0.1", 0)
+        self.posted = []
+        self.state = Path(self.tmp.name) / "state.json"
+        self.notifier = Notifier(self.server, "https://example.invalid/hook", "http://127.0.0.1:8790/", state_path=self.state,
+                                 poster=lambda url, text: self.posted.append(text))
+
+    def tearDown(self):
+        self.server.server_close()
+        self.tmp.cleanup()
+
+    def test_first_pass_is_silent_then_changes_are_posted_once(self):
+        self.assertEqual(self.notifier.pass_once(), [], "existing stops are not announced on startup")
+        self.assertEqual(self.posted, [])
+        self.assertTrue(self.state.is_file())
+        self.assertEqual(self.notifier.pass_once(), [], "nothing changed")
+        with open(self.phases / "coordinator.log", "a") as log:
+            log.write("2026-09-26T16:00:00+01:00 START phase 03 (/x/phase-03-landing.md) model=claude-sonnet-5\n"
+                      "2026-09-26T16:20:00+01:00 END phase 03 exit=0 staging-status=todo :: success | PR https://github.com/o/r/pull/9\n"
+                      "2026-09-26T16:25:00+01:00 REVIEW phase 03 round 0: verdict CLEAN (advisory CLEAN), posted to PR #9\n"
+                      "2026-09-26T16:25:00+01:00 STOP: phase 03 reviewed clean; merge its PR, then rerun\n")
+        self.server._cache = (0.0, [])
+        self.assertEqual(self.notifier.pass_once(), ["proof-hardware-phases"])
+        self.assertEqual(len(self.posted), 1)
+        self.assertIn("waits for your merge", self.posted[0])
+        self.assertIn("https://github.com/o/r/pull/9", self.posted[0])
+        self.assertIn("?batch=proof-hardware-phases", self.posted[0])
+        self.assertEqual(self.notifier.pass_once(), [], "the same need is not repeated")
+        # A restart reads the saved state and stays quiet about what it already announced.
+        again = Notifier(self.server, "https://example.invalid/hook", "http://127.0.0.1:8790/", state_path=self.state,
+                         poster=lambda url, text: self.posted.append(text))
+        self.assertEqual(again.pass_once(), [])
+        self.assertEqual(len(self.posted), 1)
+
+    def test_a_failed_post_is_retried_next_pass(self):
+        self.notifier.pass_once()
+        with open(self.phases / "coordinator.log", "a") as log:
+            log.write("2026-09-26T16:25:00+01:00 STOP: operator requested stop (x) before phase 03\n")
+        (self.phases / "STOP").write_text("")
+        self.server._cache = (0.0, [])
+        calls = []
+        def flaky(url, text):
+            calls.append(text)
+            if len(calls) == 1:
+                raise OSError("network down")
+        self.notifier.poster = flaky
+        self.assertEqual(self.notifier.pass_once(), [])
+        self.assertEqual(self.notifier.pass_once(), ["proof-hardware-phases"])
+        self.assertEqual(len(calls), 2)
+
+    def test_webhook_is_read_from_the_private_file_not_the_repo(self):
+        env = Path(self.tmp.name) / "notify.env"
+        env.write_text("# comment\nNOTIFY_WEBHOOK=https://discord.com/api/webhooks/1/abc\n")
+        self.assertEqual(read_webhook(env), "https://discord.com/api/webhooks/1/abc")
+        self.assertIsNone(read_webhook(Path(self.tmp.name) / "missing.env"))
+        # A real webhook id is a long snowflake; the fake one above is not.
+        real = re.compile(r"discord(?:app)?\.com/api/webhooks/\d{17,}")
+        repo = Path(__file__).resolve().parents[2]
+        for path in list((repo / "scripts").rglob("*.py")) + list((repo / "scripts").rglob("*.html")) + list((repo / "scripts").rglob("*.sh")):
+            self.assertIsNone(real.search(path.read_text(errors="replace")), path)
+
+    def test_notification_text(self):
+        doc = {"batch": {"phase": "COMPLETE", "needs_you": None}}
+        self.assertIn("finished", notification_text("x", doc, "http://h/"))
+        self.assertIsNone(notification_text("x", {"batch": {"phase": "RUN", "needs_you": None}}, "http://h/"))
 
 
 class RoutesTest(unittest.TestCase):
