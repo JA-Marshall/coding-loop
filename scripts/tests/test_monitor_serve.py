@@ -16,7 +16,7 @@ from urllib.parse import quote
 from urllib.request import urlopen
 
 from scripts.monitor import serve
-from scripts.monitor.serve import Notifier, discover_batches, log_tail, make_server, notification_text, read_webhook, validate_host
+from scripts.monitor.serve import Notifier, discover_batches, log_tail, make_server, notification_text, page_url_for, read_webhook, validate_host
 
 REPO = Path(__file__).resolve().parents[2]
 SMOKE = REPO / "examples" / "smoke-run"
@@ -364,6 +364,11 @@ class NotifierTest(unittest.TestCase):
                          poster=lambda url, text: self.posted.append(text))
         self.assertEqual(again.pass_once(), [])
         self.assertEqual(len(self.posted), 1)
+        # Moving the page to another address changes every link but no need.
+        moved = Notifier(self.server, "https://example.invalid/hook", "https://box.tail1234.ts.net/", state_path=self.state,
+                         poster=lambda url, text: self.posted.append(text))
+        self.assertEqual(moved.pass_once(), [])
+        self.assertEqual(len(self.posted), 1)
 
     def test_a_failed_post_is_retried_next_pass(self):
         self.notifier.pass_once()
@@ -391,6 +396,13 @@ class NotifierTest(unittest.TestCase):
         repo = Path(__file__).resolve().parents[2]
         for path in list((repo / "scripts").rglob("*.py")) + list((repo / "scripts").rglob("*.html")) + list((repo / "scripts").rglob("*.sh")):
             self.assertIsNone(real.search(path.read_text(errors="replace")), path)
+
+    def test_links_use_monitor_url_when_set(self):
+        env = Path(self.tmp.name) / "notify.env"
+        env.write_text("NOTIFY_WEBHOOK=https://example.invalid/hook\n")
+        self.assertEqual(page_url_for("127.0.0.1", 8790, env), "http://127.0.0.1:8790/")
+        env.write_text("NOTIFY_WEBHOOK=https://example.invalid/hook\nMONITOR_URL=https://box.tail1234.ts.net\n")
+        self.assertEqual(page_url_for("127.0.0.1", 8790, env), "https://box.tail1234.ts.net/")
 
     def test_notification_text(self):
         doc = {"batch": {"phase": "COMPLETE", "needs_you": None}}
