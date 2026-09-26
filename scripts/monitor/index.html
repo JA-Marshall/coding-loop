@@ -89,6 +89,10 @@ p{margin:0}
 .strip .right{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted)}
 .strip .key{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:11px;color:var(--muted);border-top:1px solid var(--hair);padding-top:8px}
 .strip .key>span{display:inline-flex;align-items:center;gap:6px}
+.strip .proof{flex-basis:100%;font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--hair)}
+.strip .proof.ok{color:var(--running);background:var(--running-soft);border-color:color-mix(in oklch,var(--running) 40%,transparent)}
+.strip .proof.bad{color:var(--failed);background:var(--failed-soft);border-color:color-mix(in oklch,var(--failed) 45%,transparent)}
+.strip .proof.idle{color:var(--muted)}
 .strip .right b{color:var(--fg);font-weight:500}
 .strip .right b.attention{color:var(--attention)}
 .strip .stop{flex-basis:100%;color:var(--attention);font-weight:500}
@@ -109,6 +113,7 @@ nav.top select{font:12px var(--mono);padding:4px 6px;border:1px solid var(--hair
 .crumb{font-size:11.5px;color:var(--muted)}
 
 /* 2 meters */
+.meters.three{grid-template-columns:repeat(3,1fr)}
 .meters{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--hair);border:1px solid var(--hair);border-radius:6px;overflow:hidden}
 .meter{background:var(--panel);padding:10px 14px 12px;display:grid;gap:6px;align-content:start}
 .meter .lab{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
@@ -200,11 +205,11 @@ footer.note a{color:var(--running)}
 .offline{position:sticky;top:0;z-index:2;padding:8px 14px;border-radius:6px;border:1px solid color-mix(in oklch,var(--attention) 45%,transparent);background:var(--attention-soft);color:var(--attention)}
 [hidden]{display:none !important}
 @media (max-width:760px){
-  .meters{grid-template-columns:1fr 1fr}
+  .meters,.meters.three{grid-template-columns:1fr 1fr}
   .two{grid-template-columns:minmax(0,1fr)}
 }
 @media (max-width:600px){
-  .meters{grid-template-columns:1fr}
+  .meters,.meters.three{grid-template-columns:1fr}
   .rail thead{display:none}
   .rail tbody tr{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;padding:10px 14px 10px 11px;border-bottom:1px solid var(--hair)}
   .rail tbody tr:last-child{border-bottom:0}
@@ -497,6 +502,20 @@ footer.note a{color:var(--running)}
       '<span><span class="dot failed"></span>something broke</span><span><span class="dot"></span>not started</span></div>';
   }
 
+  // What the operating system says, not what the log says: the processes holding the run's lock.
+  function proofLine(b, now) {
+    var pr = b.proof;
+    if (!pr) return '';
+    if (pr.died) return '<div class="proof bad"><b>Not running.</b> The log says it was working, but no process holds this run\'s lock: it was killed, crashed or the machine restarted.</div>';
+    if (!pr.alive) return '<div class="proof idle">No process is running for this run.</div>';
+    var parts = [];
+    if (pr.runner) parts.push('<b>Verified running</b>: ' + h(pr.runner.what) + ' <span class="mono">(PID ' + pr.runner.pid + ')</span>' + (pr.runner.since ? ' since ' + h(clock(pr.runner.since)) : ''));
+    else parts.push('<b>Verified running</b>: a session holds the lock, but its runner process has gone');
+    (pr.work || []).forEach(function (w) { parts.push(h(w.what) + (w.since ? ' since ' + h(clock(w.since)) : '')); });
+    if (pr.last_output != null) parts.push('last output ' + h(clock(pr.last_output)) + ' <span class="muted">(' + h(ago(now - pr.last_output)) + ')</span>');
+    return '<div class="proof ok">' + parts.join(' · ') + '</div>';
+  }
+
   function renderStrip(doc) {
     var b = doc.batch, alive = b.alive || {}, dotClass = '', phaseClass = 'running', where = '';
     if (b.tone === 'yours') { dotClass = 'attention'; phaseClass = 'attention'; }
@@ -523,9 +542,8 @@ footer.note a{color:var(--running)}
       '<div class="phase"><span class="pill ' + phaseClass + '">' + h(phaseWord(b)) + '</span><span class="muted">' + h(where) + '</span></div>' +
       '<div class="right"><span>last checkpoint ' + checkpoint + '</span>' + unit + times +
       (b.awake ? '<span>awake <b>' + h(b.awake) + '</b></span>' : '') +
-      (b.mode === 'phases' && b.budgets.cost_usd != null ? '<span>cost <b>$' + h(b.budgets.cost_usd.toFixed(2)) + '</b></span>' : '') +
       (alive.reviewing && alive.reviewing.length ? '<span>reviewing <b>phase ' + h(alive.reviewing.join(', ')) + '</b></span>' : '') + '</div>' +
-      colourKey() +
+      proofLine(b, doc.generated) + colourKey() +
       (b.abandoned ? '<div class="stop">Deadline passed at ' + h(clock(clockB.deadline)) + ' with no final checkpoint. Nothing is running; last activity ' + h(clock(clockB.ended)) + '.</div>' : '') +
       (b.stop_requested && b.phase !== 'STOPPED' ? '<div class="stop">' + (b.mode === 'phases' ? 'STOP file present. The loop stops at its next phase or review boundary; remove the file before the next run.' : 'Stop requested. Finishing the current phase.') + '</div>' : '') +
       (b.stop_requested && b.phase === 'STOPPED' && b.mode === 'phases' ? '<div class="stop">STOP file still present; remove it before the next run.</div>' : '') +
@@ -557,11 +575,10 @@ footer.note a{color:var(--running)}
     var clockSub = bud.clock.started != null ? 'started ' + clock(bud.clock.started) + (bud.clock.ended != null ? ' · ended ' + clock(bud.clock.ended) : ' · still running') : 'no start recorded';
     var ins = 0, cached = 0, outs = 0;
     doc.packets.forEach(function (p) { var t = p.phase_run && p.phase_run.result && p.phase_run.result.tokens; if (t) { ins += t.input; cached += t.cached; outs += t.output; } });
-    return '<section class="meters" aria-label="Budgets">' +
-      '<div class="meter"><div class="lab"><span>Wall clock</span><span class="num">' + (bud.clock.used != null ? h(dur(bud.clock.used, true)) : unknown()) + '</span></div><div class="sub">' + h(clockSub) + ' · no deadline in this orchestrator</div></div>' +
+    return '<section class="meters three" aria-label="Budgets">' +
+      '<div class="meter"><div class="lab"><span>Wall clock</span><span class="num">' + (bud.clock.started != null ? h(clock(bud.clock.started)) + ' → ' + (bud.clock.ended != null ? h(clock(bud.clock.ended)) : 'now') : unknown()) + '</span></div><div class="sub">' + (bud.clock.used != null ? h(dur(bud.clock.used, true)) + ' so far' + (bud.clock.ended != null ? '' : ', still running') : 'no start recorded') + '</div></div>' +
       meter('Phases done', b.index, b.total, {sub: (bud.calls.used || 0) + ' session' + (bud.calls.used === 1 ? '' : 's') + ' started' + (terminal ? '' : ', one running')}) +
       '<div class="meter"><div class="lab"><span>Tokens</span><span class="num">' + num(bud.tokens.used) + '</span></div><div class="sub">in ' + num(ins) + ' (' + num(cached) + ' cached) · out ' + num(outs) + '</div></div>' +
-      '<div class="meter"><div class="lab"><span>Cost</span><span class="num">' + (bud.cost_usd != null ? '$' + h(bud.cost_usd.toFixed(2)) : unknown()) + '</span></div><div class="sub">summed from each session\'s own accounting</div></div>' +
       '</section>';
   }
 
@@ -724,10 +741,11 @@ footer.note a{color:var(--running)}
         '<td class="title"><div class="t">' + h(p.title) + '</div><div class="s mono">' + h(p.id) + '</div></td>' +
         '<td class="state">' + stateCell(p) + '</td>' +
         cell(p.calls, 'calls', num) + (p.phase_run && p.corrections == null ? '<td class="num q" data-label="corr.">–</td>' : cell(p.corrections, 'corr.', num)) + cell(p.tokens, 'tokens', num) +
-        cell(elapsed, 'time', function (s) { return h(dur(s, true)); }) + '</tr>';
+        (p.phase_run ? '<td class="num' + (q ? ' q' : '') + '" data-label="ran">' + (q || p.started == null ? '–' : h(clock(p.started)) + '–' + (p.finished != null ? h(clock(p.finished)) : 'now')) + '</td>'
+          : cell(elapsed, 'time', function (s) { return h(dur(s, true)); })) + '</tr>';
     }).join('');
     return '<section class="panel" aria-label="Packet queue"><header><h2>Queue</h2><span class="muted">' + h(parts.join(' · ') || 'no packets') + '</span></header>' +
-      '<table class="rail"><thead><tr><th></th><th>' + (doc.batch.mode === 'phases' ? 'Phase' : 'Packet') + '</th><th>State</th><th class="num">' + (doc.batch.mode === 'phases' ? 'Sessions' : 'Calls') + '</th><th class="num">Corr.</th><th class="num">Tokens</th><th class="num">Time</th></tr></thead>' +
+      '<table class="rail"><thead><tr><th></th><th>' + (doc.batch.mode === 'phases' ? 'Phase' : 'Packet') + '</th><th>State</th><th class="num">' + (doc.batch.mode === 'phases' ? 'Sessions' : 'Calls') + '</th><th class="num">Corr.</th><th class="num">Tokens</th><th class="num">' + (doc.batch.mode === 'phases' ? 'Ran' : 'Time') + '</th></tr></thead>' +
       '<tbody>' + rows + '</tbody></table></section>';
   }
 
@@ -834,10 +852,9 @@ footer.note a{color:var(--running)}
     if (res.is_error) pills.push('<span class="pill failed">session error</span>');
     if (p.pr && p.pr.url) pills.push('<a href="' + h(p.pr.url) + '" target="_blank" rel="noopener">PR #' + p.pr.number + '</a>');
     var facts = '<dl class="kv">' +
-      '<dt>Took</dt><dd>' + (r.elapsed_s != null ? h(dur(r.elapsed_s)) : '?') + (res.duration_api_s != null ? ' <span class="muted">(' + h(dur(res.duration_api_s)) + ' of model time' + (res.turns != null ? ', ' + plural(res.turns, 'turn') : '') + ')</span>' : '') + '</dd>' +
-      '<dt>Started</dt><dd>' + (r.started != null ? h(clock(r.started)) : '?') + (r.finished != null ? ' · ended ' + h(clock(r.finished)) : '') + (r.attempts > 1 ? ' · ' + plural(r.attempts, 'attempt') : '') + '</dd>' +
+      '<dt>Ran</dt><dd>' + (r.started != null ? h(clock(r.started)) + ' → ' + (r.finished != null ? h(clock(r.finished)) : 'now') : '?') +
+        ' <span class="muted">(' + (r.elapsed_s != null ? h(dur(r.elapsed_s, true)) : '?') + (res.duration_api_s != null ? ', ' + h(dur(res.duration_api_s, true)) + ' of model time' : '') + (res.turns != null ? ', ' + plural(res.turns, 'turn') : '') + (r.attempts > 1 ? ', ' + plural(r.attempts, 'attempt') : '') + ')</span></dd>' +
       '<dt>Tokens</dt><dd>' + (t ? num(t.input + t.output) + ' <span class="muted">in ' + num(t.input) + ' (' + num(t.cached) + ' cached) · out ' + num(t.output) + (t.thinking != null ? ' · thinking ' + num(t.thinking) : '') + '</span>' : unknown()) + '</dd>' +
-      '<dt>Cost</dt><dd>' + (res.cost_usd != null ? '$' + h(res.cost_usd.toFixed(2)) : unknown()) + '</dd>' +
       '<dt>Context</dt><dd>' + contextText(r.context) + '</dd>' +
       (r.prompt ? '<dt>Prompt</dt><dd class="path"><code>' + h(r.prompt) + '</code><button type="button" data-copy="' + h(r.prompt) + '">copy path</button></dd>' : '') +
       (r.output ? '<dt>Output</dt><dd class="path"><code>' + h(r.output) + '</code><button type="button" data-copy="' + h(r.output) + '">copy path</button></dd>' : '') +
@@ -857,13 +874,13 @@ footer.note a{color:var(--running)}
     if (r.corrections && r.corrections.length) {
       corrections = '<div style="display:grid;gap:6px"><h3>Correction rounds</h3>' + r.corrections.map(function (c) {
         var pill = c.exit_code === 0 ? '<span class="pill verified">exit 0</span>' : typeof c.exit_code === 'number' ? '<span class="pill failed">exit ' + c.exit_code + '</span>' : '<span class="pill running">running</span>';
-        var took = c.started != null && c.finished != null ? dur(c.finished - c.started, true) : c.started != null ? dur(doc.generated - c.started, true) + ' so far' : '?';
+        var took = c.started != null && c.finished != null ? clock(c.started) + '–' + clock(c.finished) : c.started != null ? 'since ' + clock(c.started) : '?';
         return '<div class="check">' + pill + '<span class="mono">round ' + c.round + ' · ' + h(c.model) + ' · ' + h(took) + '</span><span class="muted">on ' + h(c.branch) + ' · PR #' + c.pr + '</span></div>';
       }).join('') + '</div>';
     }
     var review = '';
     if (r.review) {
-      var rv = r.review, parts = ['<div style="display:grid;gap:8px"><h3>Independent review' + (rv.pr ? ' of PR #' + rv.pr : '') + (rv.round != null ? ' · round ' + rv.round : '') + (rv.review_only ? ' <span class="muted">(review-only rerun)</span>' : '') + '</h3>'];
+      var rv = r.review, parts = ['<div style="display:grid;gap:8px"><h3>Independent review' + (rv.pr ? ' of PR #' + rv.pr : '') + (rv.round != null ? ' · round ' + rv.round : '') + (rv.review_only ? ' <span class="muted">(review-only rerun)</span>' : '') + (rv.at != null ? ' <span class="muted">· ' + h(clock(rv.at)) + '</span>' : rv.started != null ? ' <span class="muted">· started ' + h(clock(rv.started)) + '</span>' : '') + '</h3>'];
       var verdictPills = [];
       if (rv.verdict) verdictPills.push('<span class="pill ' + (rv.verdict === 'CLEAN' ? 'verified' : rv.verdict === 'BLOCKING' ? 'failed' : 'attention') + '">Claude: ' + h(rv.verdict) + '</span>');
       if (rv.advisory) verdictPills.push('<span class="pill ' + (rv.advisory === 'CLEAN' ? 'verified' : rv.advisory === 'BLOCKING' ? 'failed' : '') + '">GPT: ' + h(rv.advisory) + (rv.gating != null ? (rv.advisory === 'BLOCKING' && rv.gating !== 'BLOCKING' ? ' · advisory only' : '') : '') + '</span>');
