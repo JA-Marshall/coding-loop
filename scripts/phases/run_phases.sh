@@ -242,6 +242,11 @@ $(head -c 1000 "$stem-decisions.md" 2>/dev/null)
   return 0
 }
 
+pr_head() {
+  # pr_head <pr> : the PR's head commit SHA. Through the REST API, which every gh version supports (gh 2.4 has no headRefOid).
+  gh api "repos/$GH_REPO/pulls/$1" --jq .head.sha 2>/dev/null
+}
+
 ci_state() {
   # ci_state <pr> : pass, pending, none, or fail:<names> for the PR's head commit.
   gh pr view "$1" -R "$GH_REPO" --json statusCheckRollup | python3 -c '
@@ -267,7 +272,7 @@ auto_merge() {
   pr=$(find_pr "$n")
   [ -z "$pr" ] && { echo "no open PR"; return 1; }
   url="https://github.com/$GH_REPO/pull/$pr"
-  head=$(gh pr view "$pr" -R "$GH_REPO" --json headRefOid --jq .headRefOid)
+  head=$(pr_head "$pr")
   reviewed=$(cat "$LOG/phase-$n-reviewed-head" 2>/dev/null)
   if [ -z "$head" ] || [ "$head" != "$reviewed" ]; then
     echo "the PR's head ${head:0:7} is not the commit the reviewers passed (${reviewed:0:7})"; return 1
@@ -281,7 +286,8 @@ auto_merge() {
     [ "$waited" -ge "$CI_TIMEOUT" ] && { echo "CI still $ci on ${head:0:7} after $((CI_TIMEOUT / 60)) minutes"; return 1; }
     sleep 20; waited=$((waited + 20))
   done
-  if ! gh pr merge "$pr" -R "$GH_REPO" --merge --match-head-commit "$head" > /dev/null 2> "$LOG/phase-$n-merge.err"; then
+  # The REST merge endpoint refuses unless the head is still exactly $head (gh 2.4's pr merge has no --match-head-commit).
+  if ! gh api -X PUT "repos/$GH_REPO/pulls/$pr/merge" -f sha="$head" -f merge_method=merge > /dev/null 2> "$LOG/phase-$n-merge.err"; then
     echo "GitHub refused the merge: $(tail -1 "$LOG/phase-$n-merge.err")"; return 1
   fi
   log "MERGED phase $n PR #$pr at $head"
@@ -361,7 +367,7 @@ ci_gate() {
   # auto-merge checks again). On a failure it writes the failing log as a P1 finding for the next fix and returns 1,
   # so no review is spent on code that does not pass its tests.
   local n=$1 pr=$2 round=$3 waited=0 ci head attempt stem
-  head=$(gh pr view "$pr" -R "$GH_REPO" --json headRefOid --jq .headRefOid)
+  head=$(pr_head "$pr")
   log "CI phase $n round $round: waiting for checks on ${head:0:7}"
   event ci phase="$n" round="$round" pr="$pr" head="$head" state="waiting"
   while :; do
@@ -407,7 +413,7 @@ review_phase() {
   if [ -z "$pr" ]; then log "REVIEW phase $n round $round: no open PR found"; event review phase="$n" round="$round" note="no open PR found"; return 0; fi
   branch=$(gh pr view "$pr" -R "$GH_REPO" --json headRefName --jq .headRefName)
   # The commit this review judges; auto-merge refuses any other head.
-  gh pr view "$pr" -R "$GH_REPO" --json headRefOid --jq .headRefOid > "$LOG/phase-$n-reviewed-head"
+  pr_head "$pr" > "$LOG/phase-$n-reviewed-head"
   # Tests before reviewers: a failing commit goes straight back to a fix with the CI log as its finding.
   FINDINGS_FILE="$LOG/phase-$n-review-claude.md"; FINDINGS_KIND=review
   ci_gate "$n" "$pr" "$round" || return 1
@@ -555,11 +561,46 @@ run_phase() {
   if [ "$s" != "done" ]; then finish_phase "$n"; fi  # merges and returns, or stops for the owner
 }
 
+resume_phase() {
+  # resume_phase <n> : phase n already has an open PR (built earlier, then stopped for the owner). Finish that PR
+  # instead of building the phase again: merge it when the latest clean review covers the PR's current head,
+  # otherwise run the checks and a review on it first.
+  local n=$1 pr head reviewed gating file
+  pr=$(find_pr "$n")
+  file=$(ls "$PROMPTS/$BRANCH_PREFIX$n"-*.md 2>/dev/null | head -1)
+  head=$(pr_head "$pr")
+  reviewed=$(cat "$LOG/phase-$n-reviewed-head" 2>/dev/null)
+  gating=$(python3 - "$LOG/events.jsonl" "$n" <<'RESUME_PY'
+import json, sys
+last = ""
+try:
+    for line in open(sys.argv[1], encoding="utf-8"):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("event") == "verdict" and e.get("phase") == sys.argv[2]:
+            last = e.get("gating") or e.get("verdict") or ""
+except OSError:
+    pass
+print(last)
+RESUME_PY
+)
+  log "RESUME phase $n: PR #$pr is open; finishing it instead of building it again"
+  event resume phase="$n" pr="$pr"
+  if [ -z "$head" ] || [ "$head" != "$reviewed" ] || [ "$gating" != "CLEAN" ]; then
+    review_until_clean "$n" "$file" "$(model_for "$file")"
+  fi
+  finish_phase "$n"
+}
+
 cmd_run() {
   for n in $PHASES; do
     check_stop "phase $n"
     git -C "$REPO" fetch -q origin
     if [ "$(status_of "$n" "origin/$BASE_BRANCH")" = "done" ]; then log "phase $n already done"; event already_done phase="$n"; continue; fi
+    # A phase with an open PR was built already: finish it, never build it a second time.
+    if [ -n "$(find_pr "$n")" ]; then resume_phase "$n"; continue; fi
     run_phase "$n"
   done
   log "ALL requested phases done ($PHASES)"
