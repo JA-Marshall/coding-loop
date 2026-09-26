@@ -286,17 +286,30 @@ NOTIFY_STATE = Path("~/.config/coding-loop/notify-state.json").expanduser()
 NOTIFY_EVERY_S = 30
 
 
-def read_webhook(path=NOTIFY_ENV):
-    env = os.environ.get("NOTIFY_WEBHOOK")
+def read_setting(name, path=NOTIFY_ENV):
+    env = os.environ.get(name)
     if env:
         return env
     try:
         for line in Path(path).read_text().splitlines():
-            if line.startswith("NOTIFY_WEBHOOK="):
+            if line.startswith(name + "="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'") or None
     except OSError:
         return None
     return None
+
+
+def read_webhook(path=NOTIFY_ENV):
+    return read_setting("NOTIFY_WEBHOOK", path)
+
+
+def page_url_for(host, port, path=NOTIFY_ENV):
+    """The address notification links use: MONITOR_URL when the page is reachable
+    elsewhere (a tailnet name in front of this loopback server), else loopback."""
+    url = read_setting("MONITOR_URL", path)
+    if url:
+        return url.rstrip("/") + "/"
+    return "http://%s:%s/" % (host, port)
 
 
 def post_webhook(url, text):
@@ -319,6 +332,11 @@ def notification_text(batch_id, doc, page_url):
     else:
         return None
     return line + "\n" + page_url + "?batch=" + batch_id
+
+
+def need_line(text):
+    """The message without its page link, so moving the page is not news."""
+    return (text or "").split("\n", 1)[0]
 
 
 class Notifier:
@@ -348,7 +366,7 @@ class Notifier:
         sent = []
         if self.seen is not None:
             for batch_id, text in current.items():
-                if text and text != self.seen.get(batch_id):
+                if text and need_line(text) != need_line(self.seen.get(batch_id)):
                     try:
                         self.poster(self.webhook, text)
                         sent.append(batch_id)
@@ -569,9 +587,10 @@ def main(argv=None):
     print("Plans:   http://%s:%s/plans  (checkout: %s)" % (host, port, server.checkout or "none; pass --checkout"))
     webhook = None if args.no_notify else read_webhook()
     if webhook:
-        notifier = Notifier(server, webhook, "http://%s:%s/" % (host, port))
+        page_url = page_url_for(host, port)
+        notifier = Notifier(server, webhook, page_url)
         threading.Thread(target=notifier.run, daemon=True, name="notifier").start()
-        print("Notify:  posting to the webhook in %s when a run needs a decision" % NOTIFY_ENV)
+        print("Notify:  posting to the webhook in %s when a run needs a decision, linking %s" % (NOTIFY_ENV, page_url))
     else:
         print("Notify:  off (no webhook in %s)" % NOTIFY_ENV)
     try:
