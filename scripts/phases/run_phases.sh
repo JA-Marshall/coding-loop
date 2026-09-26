@@ -389,8 +389,8 @@ correct_phase() {
   local stem="$LOG/phase-$n-correct-r$round-attempt-$attempt"
   { render "$PROMPT_DIR/correct.md" SITE="$SITE" PR="$pr" BRANCH="$branch" BASE="$BASE_BRANCH" PHASE="$n" ROUND="$round" STATUS_FILE="$STATUS_FILE"
     echo; echo "===== REVIEW FINDINGS (round $((round - 1))) ====="; cat "$LOG/phase-$n-review-claude.md"
-    # A blocking advisory review travels too, so a correction can fix what only GPT found.
-    if [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
+    # A blocking advisory review travels too when it gates, so a correction can fix what only GPT found.
+    if [ "$ADVISORY_GATES" = "1" ] && [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
       echo; echo "===== ADVISORY REVIEW FINDINGS (GPT, round $((round - 1))) ====="; cat "$LOG/phase-$n-review-gpt.md"
     fi
     echo; echo "===== PHASE PROMPT (for the contract; do not redo it) ====="; cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
