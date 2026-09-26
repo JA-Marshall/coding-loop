@@ -812,6 +812,7 @@ DONE_LINE = re.compile(r"^phase (\d+) already done$")
 REVIEW_LINE = re.compile(r"^REVIEW(?:-ONLY)? phase (\d+)(?: round (\d+))?:? ?(.*)$")
 CORRECT_LINE = re.compile(r"^CORRECT phase (\d+) round (\d+) on (\S+) \(PR #(\d+)\) model=(\S+)$")
 CORRECTED_LINE = re.compile(r"^CORRECTED phase (\d+) round (\d+) exit=(\d+)$")
+CI_LINE = re.compile(r"^CI phase (\d+) round (\d+): (waiting|passed|failed|no checks|still pending)")
 INPUT_LINE = re.compile(r"^INPUT (build|review|fix|arbiter) phase (\d+) round (\d+) \((\S+)\): (.*)$")
 MERGED_LINE = re.compile(r"^MERGED phase (\d+) PR #(\d+) at (\S+)$")
 ARBITER_LINE = re.compile(r"^ARBITER phase (\d+) round (\d+)(?: on (\S+) \(PR #(\d+)\) model=(\S+).*|: (fixed and pushed|handed to the owner)[^:]*: ?(.*))$")
@@ -1213,6 +1214,18 @@ def collect_phases(directory, errors, now):
                                       "model": m2.group(5), "started": stamp, "finished": None, "exit_code": None})
             ph["segments"].append({"kind": "fix", "start": stamp, "end": None})
             continue
+        m2 = CI_LINE.match(rest)
+        if m2:  # the repository's checks, run before any review
+            ph = phase(m2.group(1))
+            if m2.group(3) == "waiting":
+                stop = None
+                ph["segments"].append({"kind": "tests", "start": stamp, "end": None})
+            else:
+                for seg in reversed(ph["segments"]):
+                    if seg["kind"] == "tests" and seg["end"] is None:
+                        seg.update(end=stamp, outcome=m2.group(3))
+                        break
+            continue
         m2 = INPUT_LINE.match(rest)
         if m2:  # the receipt for what the session just started was given
             ph = phase(m2.group(2))
@@ -1354,6 +1367,7 @@ def collect_phases(directory, errors, now):
                  and not any("could not post" in n or "no open PR" in n for n in r["review"]["notes"])]
     holders = lock_holders(directory, now)
     open_corrections = any(c["finished"] is None for r in rows for c in r["corrections"]) \
+        or any(seg["end"] is None and seg["kind"] == "tests" for r in rows for seg in r["segments"]) \
         or any((r.get("arbiter") or {}).get("started") and not r["arbiter"].get("finished") for r in rows)
     died = False
     if not stop and not all_done and (running or reviewing or open_corrections) and not holders["alive"]:
@@ -1425,6 +1439,7 @@ def collect_phases(directory, errors, now):
         if r["status"] != "stopped":
             return None
         if not stop and (r["n"] in reviewing_ids or any(c["finished"] is None for c in r["corrections"])
+                         or any(seg["end"] is None and seg["kind"] == "tests" for seg in r["segments"])
                          or ((r.get("arbiter") or {}).get("started") and not r["arbiter"].get("finished"))):
             return "working"
         if batch["tone"] == "broken" and r["n"] == last_stopped:

@@ -43,6 +43,7 @@ ADVISORY_GATES="${ADVISORY_GATES:-0}"                    # 1: an advisory BLOCKI
 MAX_CORRECTIONS="${MAX_CORRECTIONS:-2}"
 AUTO_MERGE="${AUTO_MERGE:-0}"                            # 1: every phase but the last merges itself once reviewed clean and CI is green
 CI_TIMEOUT="${CI_TIMEOUT:-1800}"
+CI_START_GRACE="${CI_START_GRACE:-180}"               # seconds to wait for CI to appear before deciding a repo has none
 ARBITER_MODEL="${ARBITER_MODEL:-}"                       # e.g. claude-fable-5-1: after MAX_CORRECTIONS, fixes it itself or hands it to the owner; empty = stop for the owner
 ARBITER_EFFORT="${ARBITER_EFFORT:-xhigh}"
 ARBITER_TIMEOUT="${ARBITER_TIMEOUT:-5400}"
@@ -354,6 +355,47 @@ RECEIPT_PY
   event input phase="$n" round="$round" what="$what" file="$(basename "$file")" receipt="$line"
 }
 
+ci_gate() {
+  # ci_gate <n> <pr> <round> : the repository's own checks run before any model reviews the code, because they are far
+  # cheaper. Returns 0 when CI passed, has no checks or is still pending after CI_TIMEOUT (the review goes ahead and
+  # auto-merge checks again). On a failure it writes the failing log as a P1 finding for the next fix and returns 1,
+  # so no review is spent on code that does not pass its tests.
+  local n=$1 pr=$2 round=$3 waited=0 ci head attempt stem
+  head=$(gh pr view "$pr" -R "$GH_REPO" --json headRefOid --jq .headRefOid)
+  log "CI phase $n round $round: waiting for checks on ${head:0:7}"
+  event ci phase="$n" round="$round" pr="$pr" head="$head" state="waiting"
+  while :; do
+    ci=$(ci_state "$pr")
+    case "$ci" in
+      pass) log "CI phase $n round $round: passed on ${head:0:7}"; event ci phase="$n" round="$round" state="passed"; return 0 ;;
+      fail:*) break ;;
+      none) [ "$waited" -ge "$CI_START_GRACE" ] && { log "CI phase $n round $round: no checks on ${head:0:7}; reviewing anyway"; return 0; } ;;
+    esac
+    if [ "$waited" -ge "$CI_TIMEOUT" ]; then
+      log "CI phase $n round $round: still pending on ${head:0:7} after $((CI_TIMEOUT / 60)) minutes; reviewing anyway"
+      event ci phase="$n" round="$round" state="pending"; return 0
+    fi
+    sleep 20; waited=$((waited + 20))
+  done
+  attempt=$(next_attempt "$LOG/phase-$n-ci-r$round")
+  stem="$LOG/phase-$n-ci-r$round-attempt-$attempt"
+  { echo "The repository's checks failed on ${head:0:7}, so no model reviewed this commit."
+    echo; echo "### P1-1 · CI: ${ci#fail:}"
+    echo "What fails: the checks above fail on commit $head."
+    echo "Smallest fix: make them pass without weakening, skipping or deleting any test or check."
+    echo; echo "Failing job output (last part):"; echo '```text'
+    for run in $(gh pr view "$pr" -R "$GH_REPO" --json statusCheckRollup --jq '.statusCheckRollup[] | select((.conclusion // .state) as $c | ($c != "SUCCESS" and $c != "SKIPPED" and $c != "NEUTRAL" and $c != "PENDING")) | .detailsUrl' \
+               | sed -n 's#.*/actions/runs/\([0-9]*\).*#\1#p' | sort -u); do
+      gh run view "$run" -R "$GH_REPO" --log-failed 2>&1 | tail -c 6000
+    done
+    echo '```'; echo; echo "VERDICT: BLOCKING"; } > "$stem.md"
+  FINDINGS_FILE="$stem.md"
+  FINDINGS_KIND=ci
+  log "CI phase $n round $round: failed on ${head:0:7}: ${ci#fail:}; skipping the review, the log goes to a fix"
+  event ci phase="$n" round="$round" state="failed" checks="${ci#fail:}"
+  return 1
+}
+
 verdict_in() { grep -q '^VERDICT: CLEAN' "$1" && echo CLEAN || { grep -q '^VERDICT: BLOCKING' "$1" && echo BLOCKING || echo UNKNOWN; }; }
 
 review_phase() {
@@ -366,6 +408,9 @@ review_phase() {
   branch=$(gh pr view "$pr" -R "$GH_REPO" --json headRefName --jq .headRefName)
   # The commit this review judges; auto-merge refuses any other head.
   gh pr view "$pr" -R "$GH_REPO" --json headRefOid --jq .headRefOid > "$LOG/phase-$n-reviewed-head"
+  # Tests before reviewers: a failing commit goes straight back to a fix with the CI log as its finding.
+  FINDINGS_FILE="$LOG/phase-$n-review-claude.md"; FINDINGS_KIND=review
+  ci_gate "$n" "$pr" "$round" || return 1
   base="$LOG/phase-$n-review-r$round"
   attempt=$(next_attempt "$base")
   local stem="$base-attempt-$attempt"
@@ -432,15 +477,19 @@ correct_phase() {
   attempt=$(next_attempt "$LOG/phase-$n-correct-r$round")
   local stem="$LOG/phase-$n-correct-r$round-attempt-$attempt"
   { render "$PROMPT_DIR/correct.md" SITE="$SITE" PR="$pr" BRANCH="$branch" BASE="$BASE_BRANCH" PHASE="$n" ROUND="$round" STATUS_FILE="$STATUS_FILE"
-    echo; echo "===== REVIEW FINDINGS (round $((round - 1))) ====="; cat "$LOG/phase-$n-review-claude.md"
+    if [ "${FINDINGS_KIND:-review}" = "ci" ]; then
+      echo; echo "===== CI FAILURE (the checks ran before any review; round $((round - 1))) ====="; cat "$FINDINGS_FILE"
+    else
+      echo; echo "===== REVIEW FINDINGS (round $((round - 1))) ====="; cat "$LOG/phase-$n-review-claude.md"
+    fi
     # A blocking advisory review travels too when it gates, so a correction can fix what only GPT found.
-    if [ "$ADVISORY_GATES" = "1" ] && [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
+    if [ "${FINDINGS_KIND:-review}" = "review" ] && [ "$ADVISORY_GATES" = "1" ] && [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
       echo; echo "===== ADVISORY REVIEW FINDINGS (GPT, round $((round - 1))) ====="; cat "$LOG/phase-$n-review-gpt.md"
     fi
     echo; echo "===== PHASE PROMPT (for the contract; do not redo it) ====="; cat "$file"; owner_decisions "$n"; } > "$stem-input.md"
   log "CORRECT phase $n round $round on $branch (PR #$pr) model=$model"
   local gpt_note=""
-  if [ "$ADVISORY_GATES" != "1" ] && [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
+  if [ "${FINDINGS_KIND:-review}" = "review" ] && [ "$ADVISORY_GATES" != "1" ] && [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
     gpt_note="GPT's blocking review left out (advisory only)"
   fi
   receipt fix "$n" "$round" "$stem-input.md" "$gpt_note"

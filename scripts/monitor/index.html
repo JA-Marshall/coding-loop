@@ -680,7 +680,7 @@ footer.note a{color:var(--running)}
           var sx = x(s.start), sw = Math.max(x(s.end != null ? s.end : end) - sx, 3);
           var name = s.kind === 'fix' ? 'fix ' + (++fixN) : s.kind;
           var when = clock(s.start) + (s.end != null ? '–' + clock(s.end) : ' → now');
-          svg.push('<rect x="' + sx.toFixed(1) + '" y="' + y + '" width="' + sw.toFixed(1) + '" height="16" rx="2" fill="' + (s.kind === 'review' ? 'var(--panel)' : s.kind === 'arbiter' ? 'var(--attention-soft)' : fill) + '" stroke="' + (s.kind === 'arbiter' ? 'var(--attention)' : stroke) + '"' + (s.kind === 'review' ? ' stroke-dasharray="3 2"' : '') + '><title>' + h(name + ' ' + when) + '</title></rect>');
+          svg.push('<rect x="' + sx.toFixed(1) + '" y="' + y + '" width="' + sw.toFixed(1) + '" height="16" rx="2" fill="' + (s.kind === 'review' ? 'var(--panel)' : s.kind === 'arbiter' ? 'var(--attention-soft)' : s.kind === 'tests' ? (s.outcome === 'failed' ? 'var(--failed-soft)' : 'var(--sunken)') : fill) + '" stroke="' + (s.kind === 'arbiter' ? 'var(--attention)' : s.kind === 'tests' ? (s.outcome === 'failed' ? 'var(--failed)' : 'var(--muted)') : stroke) + '"' + (s.kind === 'review' ? ' stroke-dasharray="3 2"' : '') + '><title>' + h(name + ' ' + when) + '</title></rect>');
           var text = k === 0 ? label : name;
           if (sw > text.length * 6.2 + 8) svg.push('<text x="' + (sx + 4).toFixed(1) + '" y="' + (y + 11.5) + '" font-family="ui-monospace,Menlo,Consolas,monospace" font-size="10" fill="var(--fg)">' + h(text) + '</text>');
         });
@@ -716,7 +716,7 @@ footer.note a{color:var(--running)}
       '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>running</span>' +
       '<span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>waiting for you</span>' +
       '<span><i style="background:var(--failed-soft);border:1px solid var(--failed)"></i>broke</span>' +
-      (b.mode === 'phases' ? '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>build or fix</span><span><i style="border:1px dashed var(--running)"></i>review</span><span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>arbiter</span>' : '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>') +
+      (b.mode === 'phases' ? '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>build or fix</span><span><i style="border:1px dashed var(--running)"></i>review</span><span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>arbiter</span><span><i style="background:var(--sunken);border:1px solid var(--muted)"></i>tests</span>' : '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>') +
       '<span><i style="background:var(--sunken);border:1px solid var(--hair)"></i>not yet</span></div>' +
       '<figcaption>' + (b.mode === 'phases' ? 'Times come from the coordinator log\'s own timestamps.' : 'Times come from file modification times until the event log ships, so treat them as approximate to a minute.') + '</figcaption></figure>';
   }
