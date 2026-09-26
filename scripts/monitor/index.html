@@ -87,6 +87,8 @@ p{margin:0}
 .strip .id .repo{overflow-wrap:anywhere}
 .strip .phase{display:flex;align-items:center;gap:8px}
 .strip .right{margin-left:auto;display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--muted)}
+.strip .key{flex-basis:100%;display:flex;flex-wrap:wrap;gap:4px 16px;font-size:11px;color:var(--muted);border-top:1px solid var(--hair);padding-top:8px}
+.strip .key>span{display:inline-flex;align-items:center;gap:6px}
 .strip .right b{color:var(--fg);font-weight:500}
 .strip .right b.attention{color:var(--attention)}
 .strip .stop{flex-basis:100%;color:var(--attention);font-weight:500}
@@ -353,7 +355,12 @@ footer.note a{color:var(--running)}
     return null;
   }
 
+  // Amber means the loop is waiting for you and nothing is wrong; red is kept for real failures.
+  function phaseWord(b) { return b.tone === 'yours' ? 'WAITING FOR YOU' : (b.phase || 'unknown'); }
+
   function registerFor(packet) {
+    if (packet.tone === 'yours') return 'attention';
+    if (packet.tone === 'working') return 'running';
     return {merged: 'verified', reviewed: 'verified', running: 'running', stopped: 'failed', queued: ''}[packet.status] || '';
   }
 
@@ -412,7 +419,7 @@ footer.note a{color:var(--running)}
   }
 
   function renderStopCard(batch) {
-    if (batch.phase !== 'STOPPED') return '';
+    if (batch.phase !== 'STOPPED' || batch.tone === 'yours') return '';
     return '<section class="panel stopcard" aria-label="Stopped">' +
       '<header><h2>Stopped' + (batch.stopped_phase ? ' in ' + h(batch.stopped_phase) : '') + '</h2><span class="pill failed">STOPPED</span></header>' +
       '<div class="body"><p class="reason">' + h(batch.reason || '(no reason recorded)') + '</p>' +
@@ -429,6 +436,7 @@ footer.note a{color:var(--running)}
   function onRunsPage() { return location.pathname === '/runs'; }
   function batchHref(id, path) { return (path || '/') + (id ? '?batch=' + encodeURIComponent(id) : ''); }
   function registerForPhase(b, now) {
+    if (b.tone === 'yours') return 'attention';
     if (b.phase === 'STOPPED') return 'failed';
     if (b.phase === 'COMPLETE' || b.phase === 'LOCAL_REVIEWED') return 'verified';
     if (b.deadline != null && now > b.deadline) return 'attention';
@@ -449,12 +457,12 @@ footer.note a{color:var(--running)}
     var rows = list.map(function (b) {
       var reg = registerForPhase(b, now), name = b.group && b.id !== b.group ? b.id.slice(b.group.length + 1) : b.id;
       var progress = b.total != null ? (b.merged + ' of ' + b.total + (b.kind === 'batch' ? ' merged' : ' reviewed')) : '';
-      var phase = b.phase === 'STOPPED' && b.stopped_phase ? 'STOPPED in ' + b.stopped_phase : (b.phase || '?');
+      var phase = b.tone !== 'yours' && b.phase === 'STOPPED' && b.stopped_phase ? 'STOPPED in ' + b.stopped_phase : phaseWord(b);
       var pillClass = reg === 'attention' ? 'attention' : reg;
       return '<tr class="' + reg + '" data-run="' + h(b.id) + '" tabindex="0" role="link">' +
         '<td><span class="dot ' + reg + '" aria-hidden="true"></span></td>' +
         '<td class="title"><div class="t">' + h(name) + ' <span class="muted">' + h(b.group || '') + '</span></div>' + (b.reason ? '<div class="reason" title="' + h(b.reason) + '">' + h(b.reason) + '</div>' : '') + '</td>' +
-        '<td class="state"><span class="pill ' + pillClass + '">' + h(phase) + '</span>' + (reg === 'attention' ? ' <span class="muted">deadline passed</span>' : '') + '</td>' +
+        '<td class="state"><span class="pill ' + pillClass + '">' + h(phase) + '</span>' + (reg === 'attention' && b.tone !== 'yours' ? ' <span class="muted">deadline passed</span>' : '') + '</td>' +
         '<td class="state muted">' + h(progress) + '</td>' +
         '<td class="num" data-label="calls">' + (b.calls != null ? num(b.calls) : '<span class="muted">–</span>') + '</td>' +
         '<td class="num" data-label="tokens">' + (b.tokens != null ? num(b.tokens) : '<span class="muted">–</span>') + '</td>' +
@@ -470,7 +478,7 @@ footer.note a{color:var(--running)}
     var groups = {}, order = [];
     list.forEach(function (b) { var g = b.group || ''; if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(b); });
     var option = function (b) {
-      var tag = b.phase === 'STOPPED' ? 'stopped' : b.phase === 'COMPLETE' ? 'complete' : (b.phase || '?').toLowerCase();
+      var tag = b.tone === 'yours' ? 'waiting for you' : b.phase === 'STOPPED' ? 'stopped' : b.phase === 'COMPLETE' ? 'complete' : (b.phase || '?').toLowerCase();
       var name = b.group && b.id !== b.group ? b.id.slice(b.group.length + 1) : b.id;
       var day = b.updated ? new Date(b.updated * 1000) : null;
       var when = day ? pad(day.getMonth() + 1) + '-' + pad(day.getDate()) + ' ' + clock(b.updated) : '';
@@ -483,9 +491,16 @@ footer.note a{color:var(--running)}
     }).join('') + '</select></label>';
   }
 
+  function colourKey() {
+    return '<div class="key" aria-label="Colour key"><span><span class="dot verified"></span>done, all good</span>' +
+      '<span><span class="dot running"></span>working</span><span><span class="dot attention"></span>waiting for you, nothing wrong</span>' +
+      '<span><span class="dot failed"></span>something broke</span><span><span class="dot"></span>not started</span></div>';
+  }
+
   function renderStrip(doc) {
     var b = doc.batch, alive = b.alive || {}, dotClass = '', phaseClass = 'running', where = '';
-    if (b.phase === 'STOPPED') { dotClass = 'failed'; phaseClass = 'failed'; }
+    if (b.tone === 'yours') { dotClass = 'attention'; phaseClass = 'attention'; }
+    else if (b.phase === 'STOPPED') { dotClass = 'failed'; phaseClass = 'failed'; }
     else if (b.abandoned) { dotClass = 'attention'; phaseClass = 'attention'; }
     else if (b.phase === 'COMPLETE' || b.phase === 'LOCAL_REVIEWED') { dotClass = 'verified'; phaseClass = 'verified'; }
     else if (alive.status === 'running') dotClass = 'running';
@@ -505,11 +520,12 @@ footer.note a{color:var(--running)}
     return '<section class="panel strip" aria-label="Batch status">' +
       '<div class="id"><span class="dot ' + dotClass + '" aria-hidden="true"></span><h1>' + h(b.id) + '</h1>' +
       (b.repository ? '<span class="muted repo">' + h(b.repository) + '</span>' : '') + '</div>' +
-      '<div class="phase"><span class="pill ' + phaseClass + '">' + h(b.phase || 'unknown') + '</span><span class="muted">' + h(where) + '</span></div>' +
+      '<div class="phase"><span class="pill ' + phaseClass + '">' + h(phaseWord(b)) + '</span><span class="muted">' + h(where) + '</span></div>' +
       '<div class="right"><span>last checkpoint ' + checkpoint + '</span>' + unit + times +
       (b.awake ? '<span>awake <b>' + h(b.awake) + '</b></span>' : '') +
       (b.mode === 'phases' && b.budgets.cost_usd != null ? '<span>cost <b>$' + h(b.budgets.cost_usd.toFixed(2)) + '</b></span>' : '') +
       (alive.reviewing && alive.reviewing.length ? '<span>reviewing <b>phase ' + h(alive.reviewing.join(', ')) + '</b></span>' : '') + '</div>' +
+      colourKey() +
       (b.abandoned ? '<div class="stop">Deadline passed at ' + h(clock(clockB.deadline)) + ' with no final checkpoint. Nothing is running; last activity ' + h(clock(clockB.ended)) + '.</div>' : '') +
       (b.stop_requested && b.phase !== 'STOPPED' ? '<div class="stop">' + (b.mode === 'phases' ? 'STOP file present. The loop stops at its next phase or review boundary; remove the file before the next run.' : 'Stop requested. Finishing the current phase.') + '</div>' : '') +
       (b.stop_requested && b.phase === 'STOPPED' && b.mode === 'phases' ? '<div class="stop">STOP file still present; remove it before the next run.</div>' : '') +
@@ -621,13 +637,13 @@ footer.note a{color:var(--running)}
     rows.forEach(function (p, i) {
       var y = 26 + i * rowH, start = x(p.started), stop = x(p.finished != null ? p.finished : end);
       var reg = registerFor(p) || 'running';
-      var fill = reg === 'verified' ? 'var(--verified-soft)' : reg === 'failed' ? 'var(--failed-soft)' : 'var(--running-soft)';
-      var stroke = reg === 'verified' ? 'var(--verified)' : reg === 'failed' ? 'var(--failed)' : 'var(--running)';
+      var fill = reg === 'verified' ? 'var(--verified-soft)' : reg === 'failed' ? 'var(--failed-soft)' : reg === 'attention' ? 'var(--attention-soft)' : 'var(--running-soft)';
+      var stroke = reg === 'verified' ? 'var(--verified)' : reg === 'failed' ? 'var(--failed)' : reg === 'attention' ? 'var(--attention)' : 'var(--running)';
       var w = Math.max(stop - start, 3);
       var label = 'P' + (doc.packets.indexOf(p) + 1);
       if (p.pr && p.pr.number) label += ' · #' + p.pr.number;
       else if (p.status === 'running') label += ' · ' + (p.phase || p.batch_phase || 'running');
-      else if (p.status === 'stopped') label += ' · STOPPED';
+      else if (p.status === 'stopped') label += p.tone === 'yours' ? ' · your turn' : p.tone === 'working' ? ' · reviewing' : ' · STOPPED';
       else if (p.status === 'reviewed') label += ' · LOCAL_REVIEWED';
       if (p.corrections) label += ' · ' + plural(p.corrections, 'correction');
       svg.push('<rect x="' + start.toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) + '" height="16" rx="2" fill="' + fill + '" stroke="' + stroke + '"/>');
@@ -657,7 +673,8 @@ footer.note a{color:var(--running)}
       '<div class="scroll"><svg viewBox="0 0 1000 ' + height + '" role="img" aria-label="' + h(aria) + '">' + svg.join('') + '</svg></div>' +
       '<div class="legend"><span><i style="background:var(--verified-soft);border:1px solid var(--verified)"></i>merged</span>' +
       '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>running</span>' +
-      '<span><i style="background:var(--failed-soft);border:1px solid var(--failed)"></i>stopped</span>' +
+      '<span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>waiting for you</span>' +
+      '<span><i style="background:var(--failed-soft);border:1px solid var(--failed)"></i>broke</span>' +
       '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>' +
       '<span><i style="background:var(--sunken);border:1px solid var(--hair)"></i>not yet</span></div>' +
       '<figcaption>' + (b.mode === 'phases' ? 'Times come from the coordinator log\'s own timestamps.' : 'Times come from file modification times until the event log ships, so treat them as approximate to a minute.') + '</figcaption></figure>';
@@ -665,7 +682,7 @@ footer.note a{color:var(--running)}
 
   function stateCell(p) {
     if (p.status === 'merged') {
-      var text = (p.phase_run ? 'done on staging' : 'merged') + (p.pr && p.pr.number ? ' #' + p.pr.number : '');
+      var text = (p.phase_run ? 'done' : 'merged') + (p.pr && p.pr.number ? ' #' + p.pr.number : '');
       return p.pr && p.pr.url ? '<a href="' + h(p.pr.url) + '" target="_blank" rel="noopener">' + h(text) + '</a>' : h(text);
     }
     if (p.status === 'running') {
@@ -673,7 +690,11 @@ footer.note a{color:var(--running)}
       var pr = p.pr && p.pr.number ? ' <span class="muted mono">#' + p.pr.number + '</span>' : '';
       return '<span class="pill running">' + h(phase) + '</span>' + pr;
     }
-    if (p.status === 'stopped' && p.phase_run) return '<span class="pill failed">not done</span>' + (p.phase_run.staging_status ? ' <span class="muted">staging: ' + h(p.phase_run.staging_status) + '</span>' : '');
+    if (p.status === 'stopped' && p.phase_run && p.tone === 'working') {
+      var fixing = (p.phase_run.corrections || []).some(function (c) { return c.finished == null; });
+      return '<span class="pill running">' + (fixing ? 'fixing review findings' : 'being reviewed') + '</span>' + (p.pr && p.pr.number ? ' <span class="muted mono">#' + p.pr.number + '</span>' : '');
+    }
+    if (p.status === 'stopped' && p.phase_run) return p.tone === 'yours' ? '<span class="pill attention">waiting for you</span>' + (p.pr && p.pr.number ? ' <span class="muted mono">#' + p.pr.number + '</span>' : '') : '<span class="pill failed">failed</span>';
     if (p.status === 'stopped') return '<span class="pill failed">STOPPED</span>' + (p.batch_phase ? ' <span class="muted">in ' + h(p.batch_phase) + '</span>' : '');
     if (p.status === 'reviewed') return '<span class="pill verified">LOCAL_REVIEWED</span>';
     return '<span class="q">queued' + (p.advisory_review ? ' · advisory review' : '') + '</span>';
@@ -681,11 +702,15 @@ footer.note a{color:var(--running)}
 
   function renderRail(doc) {
     var counts = {merged: 0, running: 0, queued: 0, stopped: 0, reviewed: 0};
-    doc.packets.forEach(function (p) { counts[p.status] = (counts[p.status] || 0) + 1; });
+    doc.packets.forEach(function (p) {
+      var key = p.status === 'stopped' && p.tone === 'yours' ? 'waiting' : p.status === 'stopped' && p.tone === 'working' ? 'running' : p.status;
+      counts[key] = (counts[key] || 0) + 1;
+    });
     var parts = [];
     if (counts.merged) parts.push(counts.merged + (doc.batch.mode === 'phases' ? ' done' : ' merged'));
     if (counts.reviewed) parts.push(counts.reviewed + ' reviewed');
     if (counts.running) parts.push(counts.running + ' running');
+    if (counts.waiting) parts.push(counts.waiting + ' waiting for you');
     if (counts.stopped) parts.push(counts.stopped + ' stopped');
     if (counts.queued) parts.push(counts.queued + ' queued');
     var rows = doc.packets.map(function (p) {
@@ -804,7 +829,7 @@ footer.note a{color:var(--running)}
     if (r.exit_code === 0) pills.push('<span class="pill verified">exit 0</span>');
     else if (typeof r.exit_code === 'number') pills.push('<span class="pill failed">exit ' + r.exit_code + '</span>');
     else if (r.status === 'running') pills.push('<span class="pill running">running</span>');
-    if (r.staging_status) pills.push('<span class="pill ' + (r.staging_status === 'done' ? 'verified' : 'attention') + '">staging: ' + h(r.staging_status) + '</span>');
+    if (r.staging_status === 'done') pills.push('<span class="pill verified">marked done</span>');
     if (r.already_done) pills.push('<span class="pill">already done on a later pass</span>');
     if (res.is_error) pills.push('<span class="pill failed">session error</span>');
     if (p.pr && p.pr.url) pills.push('<a href="' + h(p.pr.url) + '" target="_blank" rel="noopener">PR #' + p.pr.number + '</a>');
@@ -841,9 +866,9 @@ footer.note a{color:var(--running)}
       var rv = r.review, parts = ['<div style="display:grid;gap:8px"><h3>Independent review' + (rv.pr ? ' of PR #' + rv.pr : '') + (rv.round != null ? ' · round ' + rv.round : '') + (rv.review_only ? ' <span class="muted">(review-only rerun)</span>' : '') + '</h3>'];
       var verdictPills = [];
       if (rv.verdict) verdictPills.push('<span class="pill ' + (rv.verdict === 'CLEAN' ? 'verified' : rv.verdict === 'BLOCKING' ? 'failed' : 'attention') + '">Claude: ' + h(rv.verdict) + '</span>');
-      if (rv.advisory) verdictPills.push('<span class="pill ' + (rv.advisory === 'CLEAN' ? 'verified' : rv.advisory === 'BLOCKING' ? (rv.gating === 'BLOCKING' ? 'failed' : 'attention') : '') + '">GPT: ' + h(rv.advisory) + (rv.gating != null ? (rv.advisory === 'BLOCKING' && rv.gating !== 'BLOCKING' ? ' · advisory only' : '') : '') + '</span>');
+      if (rv.advisory) verdictPills.push('<span class="pill ' + (rv.advisory === 'CLEAN' ? 'verified' : rv.advisory === 'BLOCKING' ? 'failed' : '') + '">GPT: ' + h(rv.advisory) + (rv.gating != null ? (rv.advisory === 'BLOCKING' && rv.gating !== 'BLOCKING' ? ' · advisory only' : '') : '') + '</span>');
       if (verdictPills.length) parts.push('<div class="toolbar">' + verdictPills.join(' ') + '</div>');
-      if (rv.posted) parts.push('<span class="pill verified" style="justify-self:start">posted to the PR</span>');
+      if (rv.posted) parts.push('<span class="pill" style="justify-self:start">posted to the PR</span>');
       else if (rv.claude || rv.gpt) parts.push('<span class="pill attention" style="justify-self:start">not posted yet</span>');
       else parts.push('<span class="pill running" style="justify-self:start">review running' + (rv.started != null ? ' since ' + h(clock(rv.started)) : '') + '</span>');
       var block = function (title, item) {
