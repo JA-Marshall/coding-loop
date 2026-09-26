@@ -30,11 +30,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 if __package__:
-    from .collect import collect, is_phase_run, load_json, log_digest, tone_for
+    from .collect import collect, is_phase_run, load_json, lock_holders, log_digest, tone_for
     from .plans import collect_plans, render_plan
 else:  # run as a plain script from any directory: python3 /path/to/scripts/monitor/serve.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from scripts.monitor.collect import collect, is_phase_run, load_json, log_digest, tone_for
+    from scripts.monitor.collect import collect, is_phase_run, load_json, lock_holders, log_digest, tone_for
     from scripts.monitor.plans import collect_plans, render_plan
 
 PAGE = Path(__file__).with_name("index.html")
@@ -226,20 +226,8 @@ def clear_stop(target):
 
 
 def phase_lock_held(target):
-    lock = Path(target) / "lock"
-    if not lock.exists():
-        return False
-    import fcntl
-    try:
-        with open(lock, "a") as handle:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fcntl.flock(handle, fcntl.LOCK_UN)
-                return False
-            except OSError:
-                return True
-    except OSError:
-        return False
+    # Looks at who holds the lock open; never takes it, so a runner starting now is never refused.
+    return lock_holders(target)["alive"]
 
 
 def control_state(target):

@@ -983,6 +983,94 @@ def live_transcript(prompt_path, started):
     return None
 
 
+# Proof of life. run_phases.sh opens and flocks $LOG/lock for as long as it runs, and every
+# session it starts inherits that descriptor. So the live processes holding the lock file
+# open are exactly the runner and what it is doing. This only looks; it never takes the
+# lock, which could make a runner starting at that instant refuse to run.
+
+_HOLDERS_CACHE = {}
+
+
+def _proc_start(pid):
+    try:
+        fields = Path("/proc/%s/stat" % pid).read_text().rsplit(")", 1)[1].split()
+        with open("/proc/stat") as fh:
+            boot = next(int(line.split()[1]) for line in fh if line.startswith("btime "))
+        return boot + int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return None
+
+
+def _describe(argv):
+    line = " ".join(argv)
+    if "run_phases.sh" in line:
+        rest = line.split("run_phases.sh", 1)[1].split()
+        return "runner", "run_phases.sh " + (" ".join(rest) or "run")
+    if argv and os.path.basename(argv[0]) == "claude" and "-p" in argv:
+        return "session", "Claude review" if "Read,Grep,Glob" in line else "Claude session"
+    if "codex" in line and " exec" in line and os.path.basename(argv[0]) != "timeout":
+        return "session", "GPT review"
+    return None, None
+
+
+def lock_holders(directory, now=None, proc=Path("/proc")):
+    """{"alive", "runner", "work"} from the processes holding directory/lock open."""
+    lock = Path(directory) / "lock"
+    try:
+        target = lock.stat()
+    except OSError:
+        return {"alive": False, "runner": None, "work": []}
+    key = (str(lock), int(now or time.time()) // 2)
+    if key in _HOLDERS_CACHE:
+        return _HOLDERS_CACHE[key]
+    runner, work, alive = None, [], False
+    try:
+        pids = [d.name for d in proc.iterdir() if d.name.isdigit()]
+    except OSError:
+        pids = []
+    for pid in pids:
+        try:
+            fds = list((proc / pid / "fd").iterdir())
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                st = os.stat(fd)
+            except OSError:
+                continue
+            if st.st_ino == target.st_ino and st.st_dev == target.st_dev:
+                break
+        else:
+            continue
+        alive = True
+        try:
+            argv = [a for a in (proc / pid / "cmdline").read_bytes().decode(errors="replace").split("\0") if a]
+        except OSError:
+            continue
+        kind, label = _describe(argv)
+        entry = {"pid": int(pid), "what": label, "since": _proc_start(pid)}
+        if kind == "runner" and (runner is None or (entry["since"] or 0) < (runner["since"] or 0)):
+            runner = entry  # the outermost bash; its subshells hold the lock too
+        elif kind == "session" and label not in {w["what"] for w in work}:
+            work.append(entry)
+    result = {"alive": alive, "runner": runner, "work": work}
+    _HOLDERS_CACHE.clear()
+    _HOLDERS_CACHE[key] = result
+    return result
+
+
+def session_writes(repo, holders):
+    """When a live session last wrote its transcript: the model producing output, turn by turn."""
+    if not repo or not holders["work"]:
+        return []
+    since = min((w["since"] for w in holders["work"] if w["since"]), default=None)
+    folder = CLAUDE_PROJECTS / re.sub(r"[^A-Za-z0-9]", "-", str(repo))
+    try:
+        return [m for m in (mtime(p) for p in folder.glob("*.jsonl")) if m is not None and (since is None or m >= since)]
+    except OSError:
+        return []
+
+
 # One meaning per colour on the page: green is done and good, blue is working, amber is
 # waiting for the owner (nothing is wrong), red is broken. A phase run that stops so the
 # owner can merge, or because the owner asked it to, is waiting, not failed.
@@ -1101,6 +1189,7 @@ def collect_phases(directory, errors, now):
             continue
         m2 = CORRECT_LINE.match(rest)
         if m2:
+            stop = None  # a correction started by hand after a stop reopens the run
             ph = phase(m2.group(1))
             ph["corrections"].append({"round": int(m2.group(2)), "branch": m2.group(3), "pr": int(m2.group(4)),
                                       "model": m2.group(5), "started": stamp, "finished": None, "exit_code": None})
@@ -1201,6 +1290,16 @@ def collect_phases(directory, errors, now):
     running = [r for r in rows if r["status"] == "running"]
     reviewing = [r for r in rows if r["review"] and r["review"].get("started") and not r["review"].get("posted")
                  and not any("could not post" in n or "no open PR" in n for n in r["review"]["notes"])]
+    holders = lock_holders(directory, now)
+    open_corrections = any(c["finished"] is None for r in rows for c in r["corrections"])
+    died = False
+    if not stop and not all_done and (running or reviewing or open_corrections) and not holders["alive"]:
+        # The log says work is in progress but no process holds the lock: the runner was
+        # killed, crashed or the machine restarted. Nothing is running; say so.
+        died = True
+        stop = {"at": mtime(log_path) or now, "reason": "the runner died while it was working (killed, crashed or "
+                "the machine restarted); nothing is running. Press Run or Review to carry on"}
+        reviewing = []
     # A phase left "running" after a later START or STOP never ended; mark it.
     if stop:
         for r in running:
@@ -1211,7 +1310,7 @@ def collect_phases(directory, errors, now):
         phase_word = "COMPLETE"
     elif stop:
         phase_word = "STOPPED"
-    elif running or (reviewing and not stop):
+    elif running or open_corrections or (reviewing and not stop):
         phase_word = "RUN"
     else:
         phase_word = "IDLE"
@@ -1242,6 +1341,9 @@ def collect_phases(directory, errors, now):
             "packet": None, "cost_usd": cost_total,
         },
         "tone": tone_for(phase_word, stop["reason"] if stop else None, "phases"),
+        "proof": {"alive": holders["alive"], "died": died, "runner": holders["runner"], "work": holders["work"],
+                  "last_output": max([s for s in [checkpoint_at] + [mtime(p) for p in directory.glob("phase-*")]
+                                      + session_writes(repo, holders) if s is not None], default=None)},
         "stop_requested": (directory / "STOP").exists(), "reason": stop["reason"] if stop else None,
         "stopped_phase": ("phase " + running[0]["n"]) if (stop and running) else None,
         "evidence_dir": str(directory), "pr": None,
@@ -1289,6 +1391,8 @@ def needs_you(batch, packets):
     reason = batch.get("reason") or ""
     phase = batch.get("phase")
     if batch.get("mode") == "phases":
+        if (batch.get("proof") or {}).get("died"):
+            return {"kind": "inspect", "text": "The runner died while it was working: no process is running for this run any more, although the log says a phase or review was in progress. Press Run (or Review for the open PR) to carry on."}
         if batch.get("stop_requested") and phase in {"STOPPED", "COMPLETE", "IDLE"}:
             return {"kind": "clear_stop", "text": "A STOP file is present. Remove it (or press clear STOP) before the next run."}
         stopped = [p for p in packets if p["status"] == "stopped"]

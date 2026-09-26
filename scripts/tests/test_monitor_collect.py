@@ -505,12 +505,41 @@ def build_phase_run(root):
 
 class PhaseRunTest(unittest.TestCase):
     def setUp(self):
+        import scripts.monitor.collect as collect_module
+        self.module = collect_module
+        collect_module._HOLDERS_CACHE.clear()
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "proof-hardware-phases"
         build_phase_run(self.root)
+        # A live runner holds its lock file open; this test process stands in for it.
+        self.lock = open(self.root / "lock", "a")
 
     def tearDown(self):
+        self.lock.close()
         self.tmp.cleanup()
+
+    def test_log_says_running_but_no_process_means_it_died(self):
+        (self.root / "coordinator.log").write_text("2026-09-26T14:48:36+01:00 START phase 01 (/x/phase-01-a.md)\n")
+        doc = collect(self.root)
+        self.assertEqual(doc["batch"]["phase"], "RUN")
+        self.assertTrue(doc["batch"]["proof"]["alive"])
+        self.assertFalse(doc["batch"]["proof"]["died"])
+        self.lock.close()
+        self.module._HOLDERS_CACHE.clear()
+        doc = collect(self.root)
+        self.assertEqual(doc["batch"]["phase"], "STOPPED")
+        self.assertEqual(doc["batch"]["tone"], "broken")
+        self.assertTrue(doc["batch"]["proof"]["died"])
+        self.assertEqual(doc["packets"][0]["tone"], "broken")
+        self.assertEqual(doc["batch"]["needs_you"]["kind"], "inspect")
+        self.assertIn("died", doc["batch"]["needs_you"]["text"])
+
+    def test_an_open_correction_is_work_in_progress(self):
+        log = self.root / "coordinator.log"
+        log.write_text(log.read_text() + "2026-09-26T15:12:00+01:00 CORRECT phase 02 round 1 on phase-02-x (PR #4) model=m\n")
+        doc = collect(self.root, now=1_790_000_000.0)
+        self.assertEqual(doc["batch"]["phase"], "RUN")
+        self.assertEqual(doc["packets"][1]["tone"], "working")
 
     def test_stopped_phase_run(self):
         doc = collect(self.root, now=1_790_000_000.0)
