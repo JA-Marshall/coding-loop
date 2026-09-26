@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui, sans-serif" viewBox="0 0 960 300" role="img" aria-label="The supervisor assembles a prompt from a role template, the packet, a manifest of owned file names and sizes, and bounded evidence, then starts a fresh restricted process with read-only tools over a source snapshot with agent config stripped out; the process returns a JSON result and nothing carries over to the next call.">
+    <defs>
+      <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1F2126"/></marker>
+    </defs><rect x="0" y="0" width="960" height="300" fill="#ECEAE3"/>
+    <g fill="none" stroke="#1F2126" stroke-width="1.5">
+      <!-- prompt parts -->
+      <rect x="20" y="20" width="250" height="180" rx="6" fill="#F5F3EE"/>
+      <rect x="36" y="56" width="218" height="28" rx="3" fill="#ECEAE3"/>
+      <rect x="36" y="92" width="218" height="28" rx="3" fill="#ECEAE3"/>
+      <rect x="36" y="128" width="218" height="28" rx="3" fill="#ECEAE3"/>
+      <rect x="36" y="164" width="218" height="28" rx="3" fill="#ECEAE3"/>
+      <!-- process -->
+      <rect x="340" y="20" width="280" height="180" rx="6" fill="#F7E7CF" stroke="#B86E14" stroke-width="2"/>
+      <!-- snapshot -->
+      <rect x="690" y="20" width="250" height="180" rx="6" fill="#F5F3EE"/>
+      <path d="M270 110H338" marker-end="url(#a3)"/>
+      <path d="M620 110H688" marker-end="url(#a3)"/>
+      <path d="M480 200V250" marker-end="url(#a3)"/>
+      <path d="M480 250H145V202" marker-end="url(#a3)"/>
+    </g>
+    <g fill="#1F2126" font-size="12">
+      <text x="32" y="42" font-weight="500">supervisor builds the prompt</text>
+      <g font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+        <text x="46" y="74">worker.md / reviewer.md template</text>
+        <text x="46" y="110">PACKET: objective, owned files, budgets</text>
+        <text x="46" y="146">MANIFEST: file names + byte sizes only</text>
+        <text x="46" y="182">EVIDENCE: ≤8,000 chars, or the diff</text>
+      </g>
+      <text x="304" y="102" text-anchor="middle" font-size="10.5" fill="#6B6E76">stdin</text>
+      <text x="352" y="42" font-weight="500" fill="#B86E14">one fresh process, empty context</text>
+      <g font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+        <text x="352" y="70">claude -p --restricted --tools Read,Grep,Glob</text>
+        <text x="352" y="88">codex exec --sandbox read-only</text>
+        <text x="352" y="106">muse exec --no-session-log</text>
+      </g>
+      <g font-size="10.5" fill="#6B6E76">
+        <text x="352" y="134">reads only the symbols it needs</text>
+        <text x="352" y="150">no write, shell, network or delegation</text>
+        <text x="352" y="166">no --resume, no prior turns, no compaction</text>
+        <text x="352" y="182">output must match a JSON schema</text>
+      </g>
+      <text x="654" y="102" text-anchor="middle" font-size="10.5" fill="#6B6E76">reads</text>
+      <text x="702" y="42" font-weight="500">read-only source snapshot</text>
+      <g font-size="10.5" fill="#6B6E76">
+        <text x="702" y="66">tracked files copied, .env excluded</text>
+        <text x="702" y="82">stripped so nothing can override the packet:</text>
+      </g>
+      <g font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+        <text x="702" y="104">.claude/  CLAUDE.md</text>
+        <text x="702" y="122">.codex/   .agents/</text>
+        <text x="702" y="140">.git/     .github/</text>
+      </g>
+      <text x="702" y="170" font-size="10.5" fill="#6B6E76">check logs live outside the snapshot,</text>
+      <text x="702" y="184" font-size="10.5" fill="#6B6E76">so only the excerpt in EVIDENCE is visible</text>
+      <text x="492" y="232" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">{patch, summary}  or  {findings[]}</text>
+      <text x="492" y="246" font-size="10.5" fill="#6B6E76">parsed, size-capped, usage recorded</text>
+      <text x="300" y="272" text-anchor="middle" font-size="11">the next call starts from zero: only what the supervisor puts back in the prompt survives</text>
+    </g>
+  </svg>

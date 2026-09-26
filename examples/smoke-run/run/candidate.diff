@@ -1,0 +1,11 @@
+diff --git a/fixture.py b/fixture.py
+index fdf272a..d9c306f 100644
+--- a/fixture.py
++++ b/fixture.py
+@@ -1,3 +1,5 @@
+ def clamp_count(value, limit):
+     """Clamp an integer to the inclusive range zero..limit."""
+-    return value
++    if limit < 0:
++        raise ValueError("limit must be non-negative")
++    return min(max(value, 0), limit)

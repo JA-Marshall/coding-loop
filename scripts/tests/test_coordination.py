@@ -1,0 +1,746 @@
+"""Synthetic subprocess/Git fixtures: no network, models or application database."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+import signal
+from unittest.mock import patch
+import unittest
+
+from scripts.coordination.hooks import respond
+from scripts.coordination.runner import (
+    CodexAdapter, Runner, RunnerError, apply_patch, authorize_live, checkout_lock,
+    fingerprint, git, main, save_json, validate_packet,
+)
+
+
+PATCH = """diff --git a/sample.txt b/sample.txt
+index 3367afd..3e75765 100644
+--- a/sample.txt
++++ b/sample.txt
+@@ -1 +1 @@
+-old
++new
+"""
+
+
+def finding(severity="blocking", summary="sample.txt fails acceptance", file="sample.txt", scenario="new is not accepted"):
+    return {"file": file, "severity": severity, "summary": summary, "failure_scenario": scenario}
+
+
+class Adapter:
+    def __init__(self, findings=None):
+        self.roles = []
+        self.findings = findings or []
+
+    def __call__(self, runner, role, feedback):
+        self.roles.append(role)
+        if role == "worker":
+            return {"patch": PATCH, "summary": "Replace fixture text"}
+        if role == "coordinator":
+            return {"action": "FIX", "reason": "Bounded correction"}
+        return {"candidate": runner.state["candidate"], "covered_files": ["sample.txt"],
+                "acceptance": runner.packet["acceptance"], "findings": self.findings}
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Runner requires Linux/WSL")
+class RunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+        # Tests must never reach a real model CLI: failing stubs sit first on PATH
+        # unless a test installs its own fakes over them.
+        guard = self.home / "guard-bin"
+        guard.mkdir()
+        for name in ("claude", "codex"):
+            stub = guard / name
+            stub.write_text("#!/bin/sh\necho 'live model CLI called from a test' >&2\nexit 97\n")
+            stub.chmod(0o755)
+        env = patch.dict(os.environ, {"PATH": str(guard) + os.pathsep + os.environ["PATH"]})
+        env.start()
+        self.addCleanup(env.stop)
+        self.root = self.home / "repo"
+        self.root.mkdir()
+        git(self.root, "init", "-b", "codex/fixture")
+        git(self.root, "config", "user.email", "fixture@example.invalid")
+        git(self.root, "config", "user.name", "Fixture")
+        (self.root / "sample.txt").write_text("old\n")
+        git(self.root, "add", "sample.txt")
+        git(self.root, "commit", "-m", "fixture")
+        self.packet = {
+            "id": "selling-fixture", "checkout": str(self.root),
+            "base_sha": git(self.root, "rev-parse", "HEAD").decode().strip(),
+            "branch": "codex/fixture", "objective": "Replace old with new",
+            "acceptance": ["sample.txt contains new"], "owned_files": ["sample.txt"],
+            "checks": [{"id": "content", "argv": [sys.executable, "-c",
+                "from pathlib import Path; assert Path('sample.txt').read_text() == 'new\\n'"], "timeout": 5}],
+            "worker_model": "gpt-5.6-terra", "worker_reasoning": "medium",
+            "plan": "docs/plans/tasks/selling-fixture.md",
+        }
+        self.run_dir = self.home / "run"
+
+    def runner(self, adapter=None):
+        return Runner(self.packet, self.run_dir, adapter or Adapter())
+
+    def test_complete_cycle_binds_checks_and_review(self):
+        adapter = Adapter()
+        state = self.runner(adapter).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(adapter.roles, ["worker", "reviewer"])
+        self.assertEqual(state["checks"]["candidate"], fingerprint(self.root))
+        self.assertTrue((self.run_dir / "candidate.diff").is_file())
+        # The reviewed diff is also kept under the reviewer call number for replay.
+        self.assertEqual((self.run_dir / "candidate-2.diff").read_text(),
+                         (self.run_dir / "candidate.diff").read_text())
+        self.assertEqual((self.run_dir.stat().st_mode & 0o777), 0o700)
+        self.assertIn("No PR", (self.run_dir / "report.md").read_text())
+        self.assertEqual(self.runner().run(resume=True)["phase"], "LOCAL_REVIEWED")
+
+    def test_wrong_branch_and_base_rejected_without_calls(self):
+        for key, value in (("branch", "codex/wrong"), ("base_sha", "a" * 40)):
+            with self.subTest(key=key):
+                original = self.packet[key]
+                self.packet[key] = value
+                with self.assertRaises(RunnerError):
+                    self.runner().run()
+                self.packet[key] = original
+
+    def test_dirty_start_rejected(self):
+        (self.root / "unrelated.txt").write_text("preserve")
+        with self.assertRaisesRegex(RunnerError, "clean checkout"):
+            self.runner().run()
+        self.assertEqual((self.root / "unrelated.txt").read_text(), "preserve")
+
+    def test_exact_root_and_external_state_required(self):
+        with self.assertRaises(RunnerError):
+            Runner(self.packet, self.root / "state", Adapter())
+        (self.root / "sub").mkdir()
+        self.packet["checkout"] = str(self.root / "sub")
+        with self.assertRaisesRegex(RunnerError, "exact repository root"):
+            self.runner().run()
+
+    def test_duplicate_runner_even_with_different_state_directory(self):
+        with checkout_lock(self.root):
+            with self.assertRaisesRegex(RunnerError, "Another runner"):
+                Runner(self.packet, self.home / "other-run", Adapter()).run()
+
+    def test_owned_path_validation(self):
+        for name in ("../escape", "/tmp/escape", "a/../b", "a//b", "a/*", "AGENTS.md",
+                     ".git/config", ".env", "x\\y", "docs/plans/x.md"):
+            with self.subTest(name=name):
+                packet = dict(self.packet, owned_files=[name])
+                with self.assertRaises(RunnerError):
+                    validate_packet(packet)
+
+    def test_recounts_incorrect_hunk_lengths(self):
+        self.assertEqual(apply_patch(self.root, PATCH.replace("@@ -1 +1 @@", "@@ -1,9 +1,8 @@"), ["sample.txt"]), ["sample.txt"])
+        self.assertEqual((self.root / "sample.txt").read_text(), "new\n")
+
+    def test_recount_does_not_bypass_scope(self):
+        with self.assertRaises(RunnerError):
+            apply_patch(self.root, PATCH.replace("@@ -1 +1 @@", "@@ -1,9 +1,8 @@"), ["different.txt"])
+        self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
+
+    def test_patch_context_correction_uses_existing_budget_without_triage(self):
+        adapter = Adapter()
+        def fix(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "worker" and runner.state["calls"] == 1:
+                result["patch"] = PATCH.replace("-old", "-not the current content")
+            elif role == "worker":
+                self.assertIn("Patch context", feedback)
+            return result
+        state = self.runner(fix).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(state["calls"], 3)
+        self.assertEqual(state["corrections"], 1)
+        self.assertEqual(adapter.roles, ["worker", "worker", "reviewer"])
+
+    def test_bad_patch_exhaustion_retains_counters(self):
+        self.packet["max_corrections"] = 1
+        state = self.runner(lambda *_: {"patch": "not a diff", "summary": "broken"}).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertEqual(state["calls"], 2)
+        self.assertEqual(state["corrections"], 1)
+        self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
+
+    def test_patch_outside_scope_does_not_apply(self):
+        with self.assertRaises(RunnerError):
+            apply_patch(self.root, PATCH, ["different.txt"])
+        self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
+
+    def test_symlink_mode_patch_denied(self):
+        with self.assertRaises(RunnerError):
+            apply_patch(self.root, "diff --git a/x b/x\nnew file mode 120000\n", ["x"])
+
+    def test_symlink_parent_denied(self):
+        (self.root / "link").symlink_to(self.home, target_is_directory=True)
+        patch = PATCH.replace("sample.txt", "link/sample.txt")
+        with self.assertRaises(RunnerError):
+            apply_patch(self.root, patch, ["link/sample.txt"])
+
+    def test_candidate_hash_tracks_untracked_and_mode_changes(self):
+        original = fingerprint(self.root)
+        (self.root / "new.txt").write_text("untracked")
+        self.assertNotEqual(original, fingerprint(self.root))
+        (self.root / "new.txt").unlink()
+        (self.root / "sample.txt").chmod(0o755)
+        self.assertNotEqual(original, fingerprint(self.root))
+
+    def test_model_exit_or_prose_is_not_evidence(self):
+        state = self.runner(lambda *_: "done").run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("must be an object", state["reason"])
+
+    def test_readonly_model_mutation_is_detected(self):
+        def mutate(runner, *_):
+            (runner.root / "sample.txt").write_text("unauthorized")
+            return {"patch": PATCH, "summary": "done"}
+        state = self.runner(mutate).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("changed outside", state["reason"])
+
+    def test_missing_review_coverage_cannot_complete(self):
+        adapter = Adapter()
+        def missing(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "reviewer":
+                result["covered_files"] = []
+            return result
+        state = self.runner(missing).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("coverage", state["reason"])
+
+    def test_review_stale_hash_and_findings_stop(self):
+        self.packet["max_corrections"] = 0
+        state = self.runner(Adapter([finding()])).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("Correction budget", state["reason"])
+
+    def test_non_blocking_findings_become_notes_not_corrections(self):
+        self.packet["max_corrections"] = 0
+        adapter = Adapter([finding("should_fix", "Consider a guard"), finding("nit", "Rename variable")])
+        state = self.runner(adapter).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(adapter.roles, ["worker", "reviewer"])
+        self.assertEqual([f["severity"] for f in state["review"]["findings"]], ["should_fix", "nit"])
+        report = (self.run_dir / "report.md").read_text()
+        self.assertIn("Reviewer notes (non-blocking)", report)
+        self.assertIn("Consider a guard", report)
+
+    def test_malformed_finding_stops(self):
+        for index, bad in enumerate(("a plain string",
+                                     {"file": "sample.txt", "severity": "urgent", "summary": "x", "failure_scenario": "y"},
+                                     {"file": "sample.txt", "severity": "blocking", "summary": "", "failure_scenario": "y"})):
+            self.run_dir = self.home / f"run-{index}"
+            git(self.root, "reset", "-q", "--hard")
+            state = self.runner(Adapter([bad])).run()
+            self.assertEqual(state["phase"], "STOPPED", bad)
+            self.assertIn("malformed", state["reason"])
+
+    def test_second_review_receives_previous_blocking_findings(self):
+        self.packet["checks"][0]["argv"] = [sys.executable, "-c", "from pathlib import Path; assert Path('sample.txt').is_file()"]
+        adapter = Adapter()
+        seen = []
+        def reviewer_then_clean(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "reviewer":
+                seen.append(json.loads(feedback)["previous_findings"])
+                result["findings"] = [finding()] if len(seen) == 1 else []
+            elif role == "worker" and len(seen) == 1:
+                self.assertIn("Review findings", feedback)
+                self.assertIn("fails acceptance", feedback)
+                result["patch"] = PATCH.replace("-old", "-new").replace("+new", "+newer")
+            return result
+        state = self.runner(reviewer_then_clean).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(seen, [[], [finding()]])
+        self.assertEqual(state["corrections"], 1)
+
+    def test_failed_checks_never_reviewed_without_fix(self):
+        self.packet["checks"][0]["argv"] = [sys.executable, "-c", "raise SystemExit(3)"]
+        self.packet["max_corrections"] = 0
+        adapter = Adapter()
+        state = self.runner(adapter).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertEqual(adapter.roles, ["worker"])
+        self.assertEqual(state["checks"]["results"][0]["exit_code"], 3)
+
+    def test_luna_cannot_override_call_budget(self):
+        self.packet["max_calls"] = 2
+        self.packet["checks"][0]["argv"] = [sys.executable, "-c", "raise SystemExit(3)"]
+        adapter = Adapter()
+        state = self.runner(adapter).run()
+        self.assertEqual(adapter.roles, ["worker", "coordinator"])
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("call budget", state["reason"])
+
+    def test_malformed_coordinator_action_stops_with_checkpoint(self):
+        self.packet["checks"][0]["argv"] = [sys.executable, "-c", "raise SystemExit(3)"]
+        adapter = Adapter()
+        def malformed(runner, role, feedback):
+            if role == "coordinator":
+                return {"action": ["FIX"], "reason": "invalid schema"}
+            return adapter(runner, role, feedback)
+        state = self.runner(malformed).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertEqual(state["reason"], "Invalid coordinator result")
+
+    def test_check_mutation_invalidates_evidence(self):
+        self.packet["checks"][0]["argv"] = [sys.executable, "-c", "from pathlib import Path; Path('sample.txt').write_text('oops')"]
+        state = self.runner().run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("changed outside", state["reason"])
+
+    def test_timeout_records_ambiguous_operation(self):
+        self.packet["checks"][0].update(argv=[sys.executable, "-c", "import time; time.sleep(10)"], timeout=1)
+        state = self.runner().run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("TimeoutExpired", state["reason"])
+        self.assertIsNotNone(state["inflight"])
+        with self.assertRaisesRegex(RunnerError, "reconciliation"):
+            self.runner().run(resume=True)
+
+    def test_changed_packet_cannot_resume(self):
+        self.runner().run()
+        self.packet["objective"] = "Changed objective"
+        with self.assertRaisesRegex(RunnerError, "Packet changed"):
+            self.runner().run(resume=True)
+
+    def test_changed_candidate_cannot_resume(self):
+        self.runner().run()
+        (self.root / "sample.txt").write_text("changed later")
+        with self.assertRaisesRegex(RunnerError, "changed outside"):
+            self.runner().run(resume=True)
+
+    def test_completed_check_boundary_resumes_without_new_worker(self):
+        self.runner().run()
+        state = json.loads((self.run_dir / "state.json").read_text())
+        state["phase"] = "REVIEW"
+        save_json(self.run_dir / "state.json", state)
+        adapter = Adapter()
+        self.assertEqual(self.runner(adapter).run(resume=True)["phase"], "LOCAL_REVIEWED")
+        self.assertEqual(adapter.roles, ["reviewer"])
+
+    def test_correction_cycle_reaches_review_with_new_evidence(self):
+        self.packet["checks"][0]["argv"] = [sys.executable, "-c", "from pathlib import Path; assert Path('sample.txt').read_text() == 'fixed\\n'"]
+        adapter = Adapter()
+        def repair(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "worker" and runner.state["corrections"]:
+                result["patch"] = PATCH.replace("-old", "-new").replace("+new", "+fixed")
+                self.assertIn("Prescribed checks failed", feedback)
+            return result
+        state = self.runner(repair).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(adapter.roles, ["worker", "coordinator", "worker", "reviewer"])
+        self.assertEqual(state["corrections"], 1)
+        self.assertEqual(state["checks"]["candidate"], fingerprint(self.root))
+
+    def test_correction_feedback_includes_the_failing_test_output(self):
+        self.packet["checks"][0]["argv"] = [sys.executable, "-c", (
+            "from pathlib import Path\n"
+            "if Path('sample.txt').read_text() != 'fixed\\n':\n"
+            "    print('noise ' * 50)\n"
+            "    print('=' * 70)\n"
+            "    print('ERROR: test_create (operations.test_x.Tests.test_create)')\n"
+            "    print('ValidationError: Listing 1100 has no imported listing detail.')\n"
+            "    raise SystemExit(1)\n")]
+        adapter = Adapter()
+        seen = []
+        def repair(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "worker" and runner.state["corrections"]:
+                seen.append(feedback)
+                result["patch"] = PATCH.replace("-old", "-new").replace("+new", "+fixed")
+            return result
+        state = self.runner(repair).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertIn("has no imported listing detail", seen[0])
+        self.assertIn("ERROR: test_create", seen[0])
+        self.assertNotIn("noise", seen[0])
+        self.assertIn("untrusted data", seen[0])
+
+    def test_failure_excerpt_is_bounded_and_falls_back_to_the_tail(self):
+        from scripts.coordination.runner import failure_excerpt
+        log = self.home / "check.log"
+        log.write_text("\n".join(f"line {n} " + "x" * 200 for n in range(500)))
+        excerpt = failure_excerpt(log, 1000)
+        self.assertLessEqual(len(excerpt), 1000)
+        self.assertIn("[truncated]", excerpt)
+        self.assertIn("line 499", excerpt)
+        self.assertEqual(failure_excerpt(self.home / "missing.log", 1000), "(check log unavailable)")
+
+    def test_empty_worker_patch_stops_with_its_blocker_summary(self):
+        def blocked(runner, role, feedback):
+            return {"patch": "", "summary": "Blocked: the failing test output is not visible."}
+        state = self.runner(blocked).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("Worker returned no patch: Blocked: the failing test output", state["reason"])
+
+    def test_codex_worker_with_claude_review_in_real_subprocess(self):
+        with self.fake_claude_cli(None, claude_worker=False):
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual([u["role"] for u in state["usage"]], ["worker", "reviewer"])
+        self.assertTrue(all(p["characters"] < 6000 for p in state["prompts"]))
+        self.assertEqual(state["usage"][0]["reported"][0]["input_tokens"], 100)
+        for record in state["prompts"]:
+            prompt = (self.run_dir / f"prompt-{record['call']}.txt").read_text()
+            self.assertEqual(len(prompt), record["characters"])
+            self.assertIn("PACKET:", prompt)
+        self.assertIn(PATCH.splitlines()[0], (self.run_dir / "prompt-2.txt").read_text())
+
+    def fake_claude_cli(self, result, review_findings=(), advisory_findings=(), claude_worker=True):
+        """Fake claude and codex CLIs. Claude patches (when it is the worker) and reviews; codex advises."""
+        fake = self.home / "bin"
+        fake.mkdir(exist_ok=True)
+        claude = fake / "claude"
+        claude.write_text("#!" + sys.executable + "\n" + r"""import json, sys
+from pathlib import Path
+args = sys.argv[1:]
+for flag in ('-p', '--restricted', '--strict-mcp-config', '--no-session-persistence', '--disable-slash-commands'):
+    assert flag in args, flag
+assert args[args.index('--tools') + 1] == 'Read,Grep,Glob'
+assert args[args.index('--permission-mode') + 1] == 'dontAsk'
+assert args[args.index('--model') + 1] == 'claude-opus-5-5'
+assert args[args.index('--effort') + 1] == 'high'
+assert json.loads(args[args.index('--settings') + 1])['permissions']['deny'] == ['Read(**/.env*)']
+assert 'Grep' in args[args.index('--append-system-prompt') + 1]
+schema = json.loads(args[args.index('--json-schema') + 1])
+prompt = sys.stdin.read()
+assert 'PACKET:' in prompt
+print('startup notice on stderr', file=sys.stderr)
+if 'patch' in schema['properties']:
+    print(json.dumps(RESULT))
+else:
+    packet = json.loads(prompt.split('PACKET:\n', 1)[1].split('\n', 1)[0])
+    evidence = json.loads(prompt.split('\nEVIDENCE:\n', 1)[1])
+    review = {'candidate': evidence['candidate'], 'covered_files': evidence['files'],
+              'acceptance': packet['acceptance'], 'findings': REVIEW_FINDINGS}
+    print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'structured_output': review,
+                      'usage': {'input_tokens': 20, 'output_tokens': 10}}))
+""".replace("RESULT", repr(result)).replace("REVIEW_FINDINGS", repr(list(review_findings))))
+        claude.chmod(0o755)
+        codex = fake / "codex"
+        codex.write_text("#!" + sys.executable + "\n" + r"""import json, sys
+from pathlib import Path
+import os
+args = sys.argv[1:]
+assert '--json' in args and '--output-schema' in args and '-o' in args
+if '--strict-config' in args:
+    # Isolated path: its own CODEX_HOME permission profile, nothing persisted.
+    assert os.environ.get('CODEX_HOME') and '--ephemeral' in args
+else:
+    assert args[args.index('--sandbox') + 1] == 'read-only'
+    assert 'approval_policy="never"' in args
+prompt = sys.stdin.read()
+packet = json.loads(prompt.split('PACKET:\n', 1)[1].split('\n', 1)[0])
+schema = json.loads(Path(args[args.index('--output-schema') + 1]).read_text())
+if 'patch' in schema['properties']:
+    assert not CLAUDE_WORKER, 'a Claude worker must not use Codex'
+    assert args[args.index('--model') + 1] == packet['worker_model']
+    result = {'patch': PATCH_VALUE, 'summary': 'fake Codex patch'}
+else:
+    assert args[args.index('--model') + 1] == 'gpt-5.6-sol', 'Codex only advises'
+    evidence = json.loads(prompt.split('\nEVIDENCE:\n', 1)[1])
+    result = {'candidate': evidence['candidate'], 'covered_files': evidence['files'],
+              'acceptance': packet['acceptance'], 'findings': ADVISORY_FINDINGS}
+Path(args[args.index('-o') + 1]).write_text(json.dumps(result))
+print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 100, 'output_tokens': 30}}))
+""".replace("PATCH_VALUE", repr(PATCH)).replace("ADVISORY_FINDINGS", repr(list(advisory_findings)))
+          .replace("CLAUDE_WORKER", repr(claude_worker)))
+        codex.chmod(0o755)
+        if claude_worker:
+            self.packet.update(worker_model="claude-opus-5-5", worker_reasoning="high")
+        return patch.dict(os.environ, {"PATH": str(fake) + os.pathsep + os.environ["PATH"]})
+
+    CLAUDE_PATCH = {"type": "result", "subtype": "success", "is_error": False,
+                    "structured_output": {"patch": PATCH, "summary": "Claude patch"},
+                    "usage": {"input_tokens": 6, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 400,
+                              "output_tokens": 50, "output_tokens_details": {"thinking_tokens": 10}}}
+    BLOCKING = {"file": "sample.txt", "severity": "blocking", "summary": "Wrong value",
+                "failure_scenario": "The check passes but the value is still wrong."}
+
+    def test_claude_worker_and_claude_review_in_real_subprocess(self):
+        with self.fake_claude_cli(self.CLAUDE_PATCH):
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual([u["role"] for u in state["usage"]], ["worker", "reviewer"])
+        self.assertEqual(state["usage"][0]["reported"], [
+            {"input_tokens": 1046, "raw_input_tokens": 1406, "cached_input_tokens": 400,
+             "cache_read_weight": "0.1", "output_tokens": 50}])
+        self.assertEqual(state["usage"][1]["reported"][0]["input_tokens"], 20)
+        self.assertNotIn("advisory", state)
+
+    def test_high_risk_packet_gets_a_clean_advisory_review(self):
+        self.packet["advisory_review"] = True
+        with self.fake_claude_cli(self.CLAUDE_PATCH):
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual([u["role"] for u in state["usage"]], ["worker", "reviewer", "advisory"])
+        self.assertEqual(state["advisory"]["findings"], [])
+
+    def test_advisory_blocking_finding_stops_for_the_owner_without_a_correction(self):
+        self.packet["advisory_review"] = True
+        with self.fake_claude_cli(self.CLAUDE_PATCH, advisory_findings=[self.BLOCKING]):
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("owner review required", state["reason"])
+        self.assertEqual(state["corrections"], 0)
+        self.assertEqual(state["advisory"]["findings"], [self.BLOCKING])
+        self.assertEqual((self.root / "sample.txt").read_text(), "new\n")  # candidate preserved
+
+    def test_primary_blocking_finding_is_corrected_before_any_advisory_call(self):
+        self.packet["advisory_review"] = True
+        self.packet["max_corrections"] = 0
+        with self.fake_claude_cli(self.CLAUDE_PATCH, review_findings=[self.BLOCKING]):
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("Correction budget exhausted", state["reason"])
+        self.assertNotIn("advisory", [u["role"] for u in state["usage"]])
+
+    def test_advisory_is_independent_after_a_correction(self):
+        """A defect the primary missed twice must still reach an unprimed advisory reviewer."""
+        self.packet.update(advisory_review=True, max_calls=7)
+        self.packet["checks"][0]["argv"] = [sys.executable, "-c", "pass"]
+        seen = {"reviews": 0, "advisory": None}
+        def adapter(runner, role, feedback):
+            if role == "worker":
+                return {"patch": PATCH if not runner.state["corrections"] else "", "summary": "fixture"}
+            if role == "coordinator":
+                return {"action": "FIX", "reason": "fix"}
+            review = {"candidate": runner.state["candidate"], "covered_files": json.loads(feedback)["files"],
+                      "acceptance": runner.packet["acceptance"], "findings": []}
+            if role == "reviewer":
+                seen["reviews"] += 1
+                if seen["reviews"] == 1:
+                    review["findings"] = [self.BLOCKING]
+                return review
+            seen["advisory"] = json.loads(feedback)
+            return review
+        # The correction worker returns an empty patch, so seed a second real change instead.
+        def worker_then_fix(runner, role, feedback):
+            if role == "worker" and runner.state["corrections"]:
+                return {"patch": "diff --git a/extra.txt b/extra.txt\nnew file mode 100644\n--- /dev/null\n+++ b/extra.txt\n@@ -0,0 +1 @@\n+fix\n",
+                        "summary": "fix"}
+            return adapter(runner, role, feedback)
+        self.packet["owned_files"] = ["sample.txt", "extra.txt"]
+        state = self.runner(worker_then_fix).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(state["corrections"], 1)
+        self.assertNotIn("previous_findings", seen["advisory"])
+        self.assertIn("independent", (Path(__file__).resolve().parents[1] / "coordination/advisory.md").read_text())
+
+    def test_live_authority_requires_advisory_for_a_high_risk_plan(self):
+        plans = self.root / "docs/plans/tasks"
+        plans.mkdir(parents=True)
+        (plans.parent / "ACTIVE.md").write_text("target: " + self.packet["plan"])
+        (self.root / self.packet["plan"]).write_text("""<!-- storehouse-plan
+id: selling-fixture
+status: IN_PROGRESS
+implementation_authority: GOAL_GRANTED
+agent_strategy: SEQUENTIAL_WORKER
+valuation_impact: PRESENT - Stock valuation changes.
+-->
+## Agent strategy
+### Worker: implementation
+- Model: gpt-5.6-terra
+- Reasoning: medium
+- Owns: sample.txt
+""" + str(self.run_dir) + "\n")
+        with patch("scripts.validate_plans.validate_repository", return_value=[]):
+            with self.assertRaisesRegex(RunnerError, "require advisory_review"):
+                authorize_live(dict(self.packet, advisory_review=False), self.run_dir)
+            authorize_live(dict(self.packet, advisory_review=True), self.run_dir)
+
+    def test_isolated_adapter_reviews_with_claude_and_advises_with_codex(self):
+        from scripts.coordination.isolated import IsolatedAdapter
+        auth = self.home / "codex-auth"
+        auth.mkdir()
+        (auth / "auth.json").write_text("{}")
+        self.packet["advisory_review"] = True
+        with self.fake_claude_cli(self.CLAUDE_PATCH):
+            state = self.runner(IsolatedAdapter(auth)).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual([u["role"] for u in state["usage"]], ["worker", "reviewer", "advisory"])
+        self.assertTrue(all(p.get("isolated") for p in state["prompts"]))
+        self.assertTrue((self.run_dir / "codex-3").is_dir())  # advisory ran under its own CODEX_HOME
+
+    def test_advisory_review_must_be_boolean(self):
+        self.packet["advisory_review"] = "yes"
+        with self.assertRaises(RunnerError):
+            validate_packet(self.packet)
+
+    def test_claude_error_stops_with_usage_recorded(self):
+        with self.fake_claude_cli({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                                   "usage": {"input_tokens": 7, "output_tokens": 3}}):
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("Claude failed", state["reason"])
+        self.assertEqual(state["usage"][0]["reported"][0]["input_tokens"], 7)
+        self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
+
+    def test_claude_missing_usage_stops_before_patch(self):
+        with self.fake_claude_cli({"type": "result", "subtype": "success", "is_error": False,
+                                   "structured_output": {"patch": PATCH, "summary": "no usage"}}):
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("usage missing", state["reason"])
+        self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
+
+    def test_worker_cannot_patch_claude_controls(self):
+        self.packet["owned_files"] = ["CLAUDE.md"]
+        with self.assertRaises(RunnerError):
+            validate_packet(self.packet)
+
+    def test_new_file_included_in_complete_review(self):
+        self.packet["owned_files"].append("created.txt")
+        adapter = Adapter()
+        added = "diff --git a/created.txt b/created.txt\nnew file mode 100644\n--- /dev/null\n+++ b/created.txt\n@@ -0,0 +1 @@\n+created\n"
+        def create(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "worker":
+                result["patch"] += added
+            if role == "reviewer":
+                self.assertIn("created.txt", feedback)
+                result["covered_files"] = ["created.txt", "sample.txt"]
+            return result
+        state = self.runner(create).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+
+    def test_malformed_coverage_types_stop_cleanly(self):
+        adapter = Adapter()
+        def invalid(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "reviewer":
+                result["covered_files"] = [1, "sample.txt"]
+            return result
+        self.assertEqual(self.runner(invalid).run()["phase"], "STOPPED")
+
+    def test_stale_review_hash_rejected(self):
+        adapter = Adapter()
+        def stale(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "reviewer":
+                result["candidate"] = "stale"
+            return result
+        state = self.runner(stale).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("stale", state["reason"])
+
+    def test_total_deadline_prevents_restarting_work(self):
+        self.runner().run()
+        path = self.run_dir / "state.json"
+        state = json.loads(path.read_text())
+        state.update(phase="REVIEW", deadline=0)
+        save_json(path, state)
+        adapter = Adapter()
+        result = self.runner(adapter).run(resume=True)
+        self.assertEqual(result["phase"], "STOPPED")
+        self.assertEqual(adapter.roles, [])
+
+    def test_check_environment_drops_production_credentials(self):
+        with patch.dict(os.environ, {"DATABASE_URL": "do-not-inherit", "EBAY_TOKEN": "do-not-inherit", "AWS_SECRET_ACCESS_KEY": "do-not-inherit"}):
+            env = Runner.environment()
+        self.assertNotIn("DATABASE_URL", env)
+        self.assertNotIn("EBAY_TOKEN", env)
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
+        self.assertEqual(env["EBAY_ENVIRONMENT"], "mocked")
+
+    def test_child_retains_lock_after_parent_crash(self):
+        # This exercises actual file-descriptor inheritance and process death,
+        # not only nested locks inside this test process.
+        project = str(Path(__file__).resolve().parents[2])
+        pidfile = self.home / "child.pid"
+        code = """import subprocess, sys, os
+from pathlib import Path
+from scripts.coordination.runner import checkout_lock
+with checkout_lock(Path(sys.argv[1])) as fd:
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], pass_fds=(fd,), start_new_session=True)
+    Path(sys.argv[2]).write_text(str(child.pid))
+    os._exit(0)
+"""
+        subprocess.run([sys.executable, "-c", code, str(self.root), str(pidfile)],
+                       cwd=project, check=True, timeout=5)
+        child = int(pidfile.read_text())
+        try:
+            with self.assertRaisesRegex(RunnerError, "Another runner"):
+                self.runner().run()
+        finally:
+            os.killpg(child, signal.SIGKILL)
+        # The kernel drops the inherited descriptor after the process exits.
+        deadline = time.monotonic() + 3
+        while True:
+            try:
+                with checkout_lock(self.root):
+                    break
+            except RunnerError:
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.02)
+
+    def test_authority_not_granted_by_packet(self):
+        with self.assertRaises((RunnerError, FileNotFoundError)):
+            authorize_live(self.packet, self.run_dir)
+
+    def test_authority_fields_must_come_from_worker_section(self):
+        plans = self.root / "docs/plans/tasks"
+        plans.mkdir(parents=True)
+        (plans.parent / "ACTIVE.md").write_text("target: " + self.packet["plan"])
+        path = self.root / self.packet["plan"]
+        content = """<!-- storehouse-plan
+id: selling-fixture
+status: IN_PROGRESS
+implementation_authority: GOAL_GRANTED
+agent_strategy: SEQUENTIAL_WORKER
+-->
+## Agent strategy
+### Worker: implementation
+- Model: gpt-5.6-sol
+- Reasoning: high
+- Owns: another-file.txt
+## Notes
+- Model: gpt-5.6-terra
+- Reasoning: medium
+- Owns: sample.txt
+""" + str(self.run_dir) + "\n"
+        path.write_text(content)
+        # Isolate the runner's contract matching from the separately tested full
+        # plan validator: descriptive notes must never satisfy frozen fields.
+        with patch("scripts.validate_plans.validate_repository", return_value=[]):
+            with self.assertRaisesRegex(RunnerError, "frozen worker contract"):
+                authorize_live(self.packet, self.run_dir)
+            path.write_text(content.replace("- Model: gpt-5.6-sol", "- Model: gpt-5.6-terra")
+                            .replace("- Reasoning: high", "- Reasoning: medium")
+                            .replace("- Owns: another-file.txt", "- Owns: sample.txt"))
+            authorize_live(self.packet, self.run_dir)
+
+    def test_validation_mode_makes_no_calls(self):
+        path = self.home / "packet.json"
+        path.write_text(json.dumps(self.packet))
+        self.assertEqual(main([str(path), "--run-dir", str(self.run_dir)]), 0)
+        self.assertFalse(self.run_dir.exists())
+
+    def test_empty_checks_and_bad_limits_rejected(self):
+        for change in ({"checks": []}, {"max_calls": 100}, {"total_timeout": True}, {"luna_triage": "yes"}):
+            with self.assertRaises(RunnerError):
+                validate_packet(dict(self.packet, **change))
+
+
+class HookTests(unittest.TestCase):
+    def test_pretool_uses_supported_deny_shape(self):
+        result = respond({"hook_event_name": "PreToolUse", "tool_name": "Bash"})
+        self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_stop_cannot_invent_infinite_continuation(self):
+        for active in (False, True):
+            self.assertEqual(respond({"hook_event_name": "Stop", "stop_hook_active": active}), {"continue": True})
+
+
+if __name__ == "__main__":
+    unittest.main()

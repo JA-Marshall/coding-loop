@@ -1,0 +1,1 @@
+{"acceptance":["Negative values clamp to zero; values above limit clamp to limit; in-range values are preserved.","Zero limit returns zero; negative limit raises ValueError."],"candidate":"b40466561f3d4df706a557c443b9da60482d538846114d13ac1b5d9c9fd055c2","covered_files":["fixture.py"],"findings":[]}
