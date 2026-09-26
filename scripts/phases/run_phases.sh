@@ -186,6 +186,10 @@ correct_phase() {
   local stem="$LOG/phase-$n-correct-r$round-attempt-$attempt"
   { render "$PROMPT_DIR/correct.md" SITE="$SITE" PR="$pr" BRANCH="$branch" BASE="$BASE_BRANCH" PHASE="$n" ROUND="$round" STATUS_FILE="$STATUS_FILE"
     echo; echo "===== REVIEW FINDINGS (round $((round - 1))) ====="; cat "$LOG/phase-$n-review-claude.md"
+    # A blocking advisory review travels too, so a correction can fix what only GPT found.
+    if [ -s "$LOG/phase-$n-review-gpt.md" ] && [ "$(verdict_in "$LOG/phase-$n-review-gpt.md")" = "BLOCKING" ]; then
+      echo; echo "===== ADVISORY REVIEW FINDINGS (GPT, round $((round - 1))) ====="; cat "$LOG/phase-$n-review-gpt.md"
+    fi
     echo; echo "===== PHASE PROMPT (for the contract; do not redo it) ====="; cat "$file"; } > "$stem-input.md"
   log "CORRECT phase $n round $round on $branch (PR #$pr) model=$model"
   event correct phase="$n" round="$round" pr="$pr" branch="$branch" model="$model" attempt="$attempt"
