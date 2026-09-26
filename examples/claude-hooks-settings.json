@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "python3 scripts/coordination/hooks.py"}]}
+    ],
+    "PreToolUse": [
+      {"matcher": ".*", "hooks": [{"type": "command", "command": "python3 scripts/coordination/hooks.py"}]}
+    ],
+    "Stop": [
+      {"hooks": [{"type": "command", "command": "python3 scripts/coordination/hooks.py"}]}
+    ]
+  }
+}

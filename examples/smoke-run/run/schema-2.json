@@ -1,0 +1,1 @@
+{"additionalProperties":false,"properties":{"patch":{"type":"string"},"summary":{"type":"string"}},"required":["patch","summary"],"type":"object"}

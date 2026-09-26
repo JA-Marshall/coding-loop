@@ -1,0 +1,1 @@
+{"additionalProperties":false,"properties":{"acceptance":{"items":{"type":"string"},"type":"array"},"candidate":{"type":"string"},"covered_files":{"items":{"type":"string"},"type":"array"},"findings":{"items":{"type":"string"},"type":"array"}},"required":["candidate","covered_files","acceptance","findings"],"type":"object"}

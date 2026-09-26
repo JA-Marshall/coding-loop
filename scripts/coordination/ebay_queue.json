@@ -1,0 +1,205 @@
+[
+  {
+    "id": "selling-order-ingestion-and-grant-consumption",
+    "title": "Import orders promptly and consume grants once",
+    "objective": "Implement the complete eBay packet contract below using existing services and transactions. Read docs/design/UNIFIED_SELLING_WORKFLOW.md and the named packet for acceptance context; this frozen batch contract resolves planning choices. Make the feature reachable through existing commands/UI, not an unused helper. Preserve login, CSRF, money, physical stock, audit trails and write gates. No real eBay calls or production changes. Add focused regression tests and release/rollback notes. Only additive schema migrations; retain old records. Packet: docs/design/selling-plan-packets/10-selling-order-ingestion-and-grant-consumption.md. Use a captured UTC upper watermark and five-minute overlap from last successful seller-order checkpoint, a 60-second orders-only polling interval, and complete-pagination plus successful import before checkpoint advancement. Remove the artificial two-minute end delay from this fast path. Keep the slow enrichment/buyer worker separate; retain legacy default command compatibility. Freeze order-line identity as account/environment/order/line and immutable originating grant, sellable factor, group and evidence snapshots. Replays cannot multiply demand or consumption. If historical attribution is ambiguous, persist an explicit exception and retain liability; never infer the latest batch. Cancellation/refund/dispatch handling must conserve existing stock and avoid automatic remote restock credit. Reuse stock_commitments.py locking and historical events. Read docs/workflows/ebay-auto-run-authority.md for verified API limits.",
+    "acceptance": [
+      "Duplicate, overlapping and out-of-order imports create one demand and consume one grant. Two 50-packs consume 100 physical units and preserve source money.",
+      "Partial pagination or failure retains a replayable cursor; slow media or billing cannot starve the independent seller-order loop.",
+      "Late orders after an evidence switch keep original grant/group history; unknown binding creates an exception instead of assigning current evidence.",
+      "Dispatch, cancellation, refund and marketplace auto-restock never double-credit or double-debit stock; shipped-cancellation safeguards remain.",
+      "Dedicated orders-only scheduling/health configuration is documented and tested with writes disabled; legacy command behavior remains compatible."
+    ],
+    "owned_files": [
+      "operations/ebay.py",
+      "operations/ebay_sync.py",
+      "operations/models.py",
+      "operations/stock_commitments.py",
+      "operations/sales.py",
+      "operations/services.py",
+      "operations/management/commands/sync_ebay.py",
+      "operations/management/commands/check_ebay_sync_health.py",
+      "operations/test_selling_order_polling.py",
+      "operations/test_selling_order_ingestion.py",
+      "operations/test_selling_stock_commitments.py",
+      "operations/migrations/0055_selling_order_ingestion.py",
+      "config/settings.py",
+      "compose.production.yml",
+      "compose.yaml",
+      "docs/workflows/selling-order-ingestion.md"
+    ],
+    "test_labels": [
+      "operations.test_selling_order_polling",
+      "operations.test_selling_order_ingestion",
+      "operations.test_selling_multipacks",
+      "operations.test_selling_stock_commitments",
+      "operations.test_ebay_billing"
+    ],
+    "worker_model": "gpt-5.6-sol",
+    "worker_reasoning": "high",
+    "depends_on": [],
+    "impacts": {
+      "schema": "PRESENT - Additive state/history fields only if needed; migration rehearsal and backup before release.",
+      "data": "PRESENT - Durable synthetic order/grant/operation records; retain history.",
+      "valuation": "PRESENT - Preserve physical-demand and stock conservation; no cost or source-money reinterpretation.",
+      "reporting": "PRESENT - Expose operation health and uncertain state to the operator.",
+      "marketplace_write": "NONE - Read-side order path only.",
+      "production": "NONE - Code and compose candidates only; no deployment."
+    }
+  },
+  {
+    "id": "selling-ebay-stock-updates",
+    "title": "Apply bounded eBay stock updates",
+    "objective": "Implement the complete eBay packet contract below using existing services and transactions. Read docs/design/UNIFIED_SELLING_WORKFLOW.md and the named packet for acceptance context; this frozen batch contract resolves planning choices. Make the feature reachable through existing commands/UI, not an unused helper. Preserve login, CSRF, money, physical stock, audit trails and write gates. No real eBay calls or production changes. Add focused regression tests and release/rollback notes. Only additive schema migrations; retain old records. Packet: docs/design/selling-plan-packets/11-selling-ebay-stock-updates.md. Freeze first supported quantity adapter to traditional single-variation fixed-price GTC listings tracked by ItemID, confirmed account/environment/backend and out-of-stock support; unsupported/unknown capabilities block sends. Use ReviseInventoryStatus quantity-only (no price) and verify via GetItem; never apply Trading writes to Inventory-created listings. Reserve the full potentially new NONZERO quantity before sending while retaining prior unsettled liability even for apparent decreases. Default automation to exhausted-batch refill only; lack of proven closure keeps old commitment encumbered. Zero withdrawal confirms remote state but never by itself proves late orders reconciled. Persist generation, operation and grant binding. Caps/holdback and explicit listing allowlist default disabled/empty. In addition to existing deployment write gates, require recorded capability qualification before any real send; synthetic tests may inject proved adapters. Display target/observed/committed/uncertain quantities and local pause versus remote unavailable. Implement full synthetic contract with live qualification explicitly outstanding, not invented. Read docs/workflows/ebay-auto-run-authority.md for verified API limits.",
+    "acceptance": [
+      "A sale between read and absolute write cannot yield unbacked exposure: reserve full potentially new quantity and retain unsettled old liability, including an apparent decrease.",
+      "Accepted, rejected, partially accepted and unknown outcomes reconcile separately; failed withdrawal never frees stock for another listing or channel.",
+      "Default exhausted-batch refill retains uncertain liabilities; neither timeout nor restart reclaims stock.",
+      "The 5,000-container scenario conserves physical units across pack sizes, sales and cancellations. UI distinguishes local pause from confirmed remote unavailability.",
+      "Account/backend/capability/allowlist/write gates fail closed. Real marketplace capability qualification remains disabled and documented until separately evidenced."
+    ],
+    "owned_files": [
+      "operations/ebay_stock.py",
+      "operations/ebay.py",
+      "operations/ebay_listing_details.py",
+      "operations/models.py",
+      "operations/stock_commitments.py",
+      "operations/channel_operations.py",
+      "operations/channel_operation_views.py",
+      "operations/selling_workspace.py",
+      "operations/views.py",
+      "operations/urls.py",
+      "operations/test_ebay_stock.py",
+      "operations/test_selling_stock_commitments.py",
+      "operations/test_channel_operations.py",
+      "operations/migrations/0056_selling_ebay_stock.py",
+      "config/settings.py",
+      "warehouse_templates/warehouse/selling_workspace.html",
+      "warehouse_templates/warehouse/selling_channel_operations.html",
+      "docs/workflows/selling-ebay-stock.md"
+    ],
+    "test_labels": [
+      "operations.test_ebay_stock",
+      "operations.test_selling_stock_commitments",
+      "operations.test_channel_operations",
+      "operations.test_selling_workspace"
+    ],
+    "worker_model": "gpt-5.6-sol",
+    "worker_reasoning": "high",
+    "depends_on": [
+      "selling-order-ingestion-and-grant-consumption"
+    ],
+    "impacts": {
+      "schema": "PRESENT - Additive state/history fields only if needed; migration rehearsal and backup before release.",
+      "data": "PRESENT - Durable synthetic order/grant/operation records; retain history.",
+      "valuation": "PRESENT - Preserve physical-demand and stock conservation; no cost or source-money reinterpretation.",
+      "reporting": "PRESENT - Expose operation health and uncertain state to the operator.",
+      "marketplace_write": "PRESENT - Implement disabled-by-default adapters; no live calls during this batch.",
+      "production": "NONE - Code and compose candidates only; no deployment."
+    }
+  },
+  {
+    "id": "selling-current-stock-report-handover",
+    "title": "Switch test-report evidence with supplied stock",
+    "objective": "Implement the complete eBay packet contract below using existing services and transactions. Read docs/design/UNIFIED_SELLING_WORKFLOW.md and the named packet for acceptance context; this frozen batch contract resolves planning choices. Make the feature reachable through existing commands/UI, not an unused helper. Preserve login, CSRF, money, physical stock, audit trails and write gates. No real eBay calls or production changes. Add focused regression tests and release/rollback notes. Only additive schema migrations; retain old records. Packet: docs/design/selling-plan-packets/12-selling-current-stock-report-handover.md. Freeze ordered drain and reconciliation -> confirmed unavailable -> approved evidence/content revision confirmed -> new stock grant state machine, one stock group per pack. Default finish old group first. Every transition persists evidence and operation generation, and rechecks after crash. Reuse content revision capability policy: report screenshots remain blocked if eBay gallery policy is unsupported; expose the existing supported evidence/status surface and preserve that limitation. Retain historical order snapshots and immutable media references. Follow-stock policy must be explicit opt-in with writes disabled by default. Revocation/FAIL blocks admission immediately, schedules supported withdrawal/removal and retains uncertain remote liabilities. Never silently discard unmanaged photo slots. Read docs/workflows/ebay-auto-run-authority.md for verified API limits.",
+    "acceptance": [
+      "January sells out and May is tested: same listing confirms May evidence before any May quantity is offered; older orders retain January evidence.",
+      "Remaining January units, delayed orders, failed uploads, timeouts and restart never misattribute January sales to May reports.",
+      "Later FAIL or revocation blocks admission and initiates supported removal/withdrawal while remote uncertainty stays visible.",
+      "Operator can see which group/evidence backs each offer; unmanaged slots survive and identical evidence is not re-uploaded.",
+      "Unsupported gallery publication is explicitly blocked; history survives archive/retention and all intermediate failure states have regression coverage."
+    ],
+    "owned_files": [
+      "operations/evidence_handover.py",
+      "operations/stock_evidence.py",
+      "operations/stock_evidence_views.py",
+      "operations/stock_evidence_forms.py",
+      "operations/stock_commitments.py",
+      "operations/ebay_stock.py",
+      "operations/ebay_listing_revision.py",
+      "operations/channel_operations.py",
+      "operations/models.py",
+      "operations/selling_workspace.py",
+      "operations/urls.py",
+      "operations/test_evidence_handover.py",
+      "operations/test_stock_evidence.py",
+      "operations/test_ebay_listing_revision.py",
+      "operations/migrations/0057_selling_evidence_handover.py",
+      "warehouse_templates/warehouse/selling_workspace.html",
+      "warehouse_templates/warehouse/selling_stock_evidence.html",
+      "docs/workflows/selling-evidence-handover.md"
+    ],
+    "test_labels": [
+      "operations.test_evidence_handover",
+      "operations.test_stock_evidence",
+      "operations.test_ebay_listing_revision",
+      "operations.test_selling_stock_commitments"
+    ],
+    "worker_model": "claude-opus-5-5",
+    "worker_reasoning": "high",
+    "depends_on": [
+      "selling-ebay-stock-updates"
+    ],
+    "impacts": {
+      "schema": "PRESENT - Additive state/history fields only if needed; migration rehearsal and backup before release.",
+      "data": "PRESENT - Durable synthetic order/grant/operation records; retain history.",
+      "valuation": "PRESENT - Preserve physical-demand and stock conservation; no cost or source-money reinterpretation.",
+      "reporting": "PRESENT - Expose operation health and uncertain state to the operator.",
+      "marketplace_write": "PRESENT - Implement disabled-by-default adapters; no live calls during this batch.",
+      "production": "NONE - Code and compose candidates only; no deployment."
+    }
+  },
+  {
+    "id": "selling-ebay-create-and-lifecycle",
+    "title": "Create eBay listings from Selling and retire them to zero quantity",
+    "objective": "Implement the complete eBay packet contract below using existing services and transactions. Read docs/design/UNIFIED_SELLING_WORKFLOW.md and the named packet for acceptance context; this frozen batch contract resolves planning choices. Make the feature reachable through existing commands/UI, not an unused helper. Preserve login, CSRF, money, physical stock, audit trails and write gates. No real eBay calls or production changes. Add focused regression tests and release/rollback notes. Only additive schema migrations; retain old records. Packet: docs/design/selling-plan-packets/13-selling-ebay-create-and-lifecycle.md. Owner decision 2026-09-26 overrides the packet text: listings are never ended or relisted by Storehouse. Freeze traditional single-variation fixed-price GTC creation using AddFixedPriceItem. Retiring a listing sets its quantity to 0 through packet 11's existing zero-quantity path (prepare_quantity_update), which already requires verified GTC out-of-stock capability, so the listing stays live on eBay; do not call EndFixedPriceItem or RelistFixedPriceItem and add no end/relist code paths. A listing ended outside Storehouse is shown as ended (not relisted); the operator can adopt or create a new listing. Use existing configured business policies and explicit operator price/category/condition/content confirmation; never invent account settings. Preserve Inventory Sandbox publishing path rather than migrating it. Use durable operation identity and materialized content with whole positive quantity backed by a grant. Persist new remote ItemID only after account/environment verification. A lost create response stays UNKNOWN with explicit reconciliation; do not blindly resend or claim a MessageID makes writes idempotent. Retiring to zero preserves identity/order/evidence lineage and unsettled liabilities. Gate real sends on recorded capability qualification, empty-by-default allowlist and existing environment/write authorization. Provide explicit Selling UI confirmation forms and actionable outcome states. Read docs/workflows/ebay-auto-run-authority.md for verified API limits.",
+    "acceptance": [
+      "New listing uses approved content and reserved stock grant; resulting identity belongs to correct account/environment.",
+      "Timeout after creation never causes blind duplicate creation; a failed or unresolved zero-quantity retirement cannot release/reuse a grant.",
+      "Retiring sets quantity 0 via the packet 11 path and keeps the listing live; Storehouse never ends or relists, and a listing ended elsewhere is shown as ended; existing Inventory Sandbox draft behavior remains compatible.",
+      "Phone-created listings can still be adopted; creating from Storehouse joins the same workflow.",
+      "Positive quantities always use packet11 backing, explicit confirmation and disabled-by-default qualified capability gates; creation and retirement uncertainty is visible and tested."
+    ],
+    "owned_files": [
+      "operations/ebay_lifecycle.py",
+      "operations/ebay.py",
+      "operations/ebay_listing_publish.py",
+      "operations/ebay_listing_validation.py",
+      "operations/models.py",
+      "operations/channel_operations.py",
+      "operations/channel_operation_views.py",
+      "operations/selling_workspace.py",
+      "operations/views.py",
+      "operations/forms.py",
+      "operations/urls.py",
+      "operations/test_ebay_lifecycle.py",
+      "operations/test_ebay_listing_validation.py",
+      "operations/test_channel_operations.py",
+      "operations/migrations/0058_selling_ebay_lifecycle.py",
+      "config/settings.py",
+      "warehouse_templates/warehouse/selling_workspace.html",
+      "warehouse_templates/warehouse/selling_channel_operations.html",
+      "warehouse_templates/warehouse/selling_listing_lifecycle.html",
+      "docs/workflows/selling-ebay-lifecycle.md"
+    ],
+    "test_labels": [
+      "operations.test_ebay_lifecycle",
+      "operations.test_ebay_listing_validation",
+      "operations.test_channel_operations",
+      "operations.test_selling_stock_commitments"
+    ],
+    "worker_model": "claude-opus-5-5",
+    "worker_reasoning": "high",
+    "depends_on": [
+      "selling-current-stock-report-handover"
+    ],
+    "impacts": {
+      "schema": "PRESENT - Additive state/history fields only if needed; migration rehearsal and backup before release.",
+      "data": "PRESENT - Durable synthetic order/grant/operation records; retain history.",
+      "valuation": "PRESENT - Preserve physical-demand and stock conservation; no cost or source-money reinterpretation.",
+      "reporting": "PRESENT - Expose operation health and uncertain state to the operator.",
+      "marketplace_write": "PRESENT - Implement disabled-by-default adapters; no live calls during this batch.",
+      "production": "NONE - Code and compose candidates only; no deployment."
+    }
+  }
+]

@@ -1,0 +1,24 @@
+{
+  "id": "example-clamp-fix",
+  "checkout": "/absolute/path/to/your/checkout",
+  "base_sha": "0000000000000000000000000000000000000000",
+  "branch": "codex/example-clamp-fix",
+  "plan": "docs/plans/tasks/example-clamp-fix.md",
+  "objective": "Fix only fixture.py: clamp_count(value, limit) clamps an integer value to the inclusive range zero..limit and raises ValueError for a negative limit. Read fixture.py and verify.py only. Do not change verify.py or add files. Keep the implementation minimal and return its unified diff.",
+  "acceptance": [
+    "Negative values clamp to zero; values above limit clamp to limit; in-range values are preserved.",
+    "Zero limit returns zero; negative limit raises ValueError."
+  ],
+  "owned_files": ["fixture.py"],
+  "checks": [
+    {"id": "clamp-acceptance", "argv": ["python3", "-B", "verify.py"], "timeout": 15}
+  ],
+  "worker_model": "claude-opus-5-5",
+  "worker_reasoning": "high",
+  "advisory_review": false,
+  "luna_triage": false,
+  "max_calls": 6,
+  "max_corrections": 2,
+  "call_timeout": 600,
+  "total_timeout": 1800
+}
