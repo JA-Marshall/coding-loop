@@ -45,6 +45,10 @@ PHASE_TIMEOUT="${PHASE_TIMEOUT:-10800}"
 REVIEW_TIMEOUT="${REVIEW_TIMEOUT:-1800}"
 CORRECT_TIMEOUT="${CORRECT_TIMEOUT:-5400}"
 PROMPT_DIR="${PROMPT_DIR:-$LOG/prompts}"                 # review.md and correct.md templates
+# The only MCP servers a phase or correction session loads. Without this they would also load
+# the account's claude.ai connectors and plugins, which unattended sessions never use and
+# report as needing sign-in. The reviewer loads none at all.
+[ -n "${WORKER_MCP:-}" ] || WORKER_MCP='{"mcpServers":{"playwright":{"type":"stdio","command":"npx","args":["-y","@playwright/mcp@latest","--browser","chromium"]}}}'
 # ---------------------------------------------------------------- end of configuration
 
 log() { echo "$(date -Is) $*" >> "$LOG/coordinator.log"; }
@@ -193,7 +197,7 @@ correct_phase() {
     echo; echo "===== PHASE PROMPT (for the contract; do not redo it) ====="; cat "$file"; } > "$stem-input.md"
   log "CORRECT phase $n round $round on $branch (PR #$pr) model=$model"
   event correct phase="$n" round="$round" pr="$pr" branch="$branch" model="$model" attempt="$attempt"
-  ( cd "$REPO" && timeout "$CORRECT_TIMEOUT" claude -p --model "$model" --permission-mode auto --output-format json \
+  ( cd "$REPO" && timeout "$CORRECT_TIMEOUT" claude -p --strict-mcp-config --mcp-config "$WORKER_MCP" --model "$model" --permission-mode auto --output-format json \
       < "$stem-input.md" > "$stem.json" 2> "$stem.err" )
   local code=$?
   point_latest "$LOG/phase-$n-correct-r$round.json" "$stem.json"
@@ -232,7 +236,7 @@ run_phase() {
   log "START phase $n ($file) model=$model"
   event start phase="$n" prompt="$file" model="$model" attempt="$attempt"
   point_latest "$LOG/phase-$n.json" "$stem.json"; point_latest "$LOG/phase-$n.err" "$stem.err"
-  ( cd "$REPO" && timeout "$PHASE_TIMEOUT" claude -p --model "$model" --permission-mode auto --output-format json \
+  ( cd "$REPO" && timeout "$PHASE_TIMEOUT" claude -p --strict-mcp-config --mcp-config "$WORKER_MCP" --model "$model" --permission-mode auto --output-format json \
       < "$file" > "$stem.json" 2> "$stem.err" )
   local code=$?
   git -C "$REPO" fetch -q origin
