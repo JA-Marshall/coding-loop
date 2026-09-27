@@ -161,5 +161,3 @@ page lists every run it finds, newest first. It understands both the coding loop
 and the phase runner's log (`scripts/phases/`). Its only writes are explicit operator actions: the
 `STOP` file both loops honour, phase owner decisions, and launching the runner's own `run`,
 `review` and `correct` commands. Its plan and mockup are in `docs/monitor/`.
-
-![A completed nine-phase website run with its build and review timeline](docs/screenshots/completed-run.png)
