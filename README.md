@@ -2,6 +2,12 @@
 
 An unattended coding loop that turns a queue of frozen task packets into merged pull requests. Every model call is a fresh process with an empty context. Ordinary Python does everything else: applying patches, running checks, committing, pushing, opening PRs, polling CI, merging, checkpointing and resuming.
 
+![Phase monitor showing a four-phase checkout build waiting for its final owner decision](docs/screenshots/phase-monitor.png)
+
+The browser monitor makes the supervisor's evidence legible while it runs: budgets, model calls,
+checks, reviews, corrections, pull requests and the exact point where an owner is needed. It can
+watch both packet batches and the lighter phase runner from one page.
+
 It was built to run overnight against a private Django repo (a one-person inventory and eBay selling system) with GPT and Claude taking turns as worker and reviewer. The code here is lifted from that repo's `scripts/coordination/` unchanged, plus its tests, so you can read a real thing rather than a sketch.
 
 Amber in the diagrams is the only place model tokens are spent.
@@ -73,7 +79,7 @@ scripts/coordination/
   hooks.py          optional Claude Code hook profile for the worker process
   worker.md, reviewer.md, advisory.md, coordinator.md   role prompts
   ebay_queue.json   the real four-packet queue this shipped with
-scripts/tests/      92 tests, no live models
+scripts/tests/      197 tests, no live models
 scripts/validate_plans.py, PLANS.md, docs/plans/templates/
                     the plan lifecycle the batch loop drives (DRAFT → READY → IN_PROGRESS → COMPLETE)
 examples/           a real smoke run with fault injection, plus starter packet, manifest and hook config
@@ -82,10 +88,29 @@ examples/           a real smoke run with fault injection, plus starter packet, 
 ## Running the tests
 
 ```sh
-python3 -m unittest scripts.tests.test_coordination scripts.tests.test_coordination_batch scripts.tests.test_export_reviews
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 ```
 
 They stub every model CLI. A failing stub is put first on `PATH` so no test can reach a real model.
+
+## Try the monitor without a model
+
+The repository includes a recorded, synthetic smoke run. It contains no live repository or model
+credentials, so it is the quickest way to see the UI:
+
+```sh
+git clone https://github.com/JA-Marshall/coding-loop.git
+cd coding-loop
+python3 scripts/monitor/serve.py --directory examples/smoke-run
+```
+
+Open `http://127.0.0.1:8790/`. The monitor uses only the Python standard library and binds to
+loopback. Running real packets additionally needs Git, an authenticated GitHub CLI, and at least
+one supported model CLI. The background batch service expects Linux with systemd; WSL works.
+
+This is currently a working extraction, not a polished package. The monitor and phase runner take
+project configuration at runtime, while the full batch path still contains the Storehouse-specific
+queue, plan lifecycle, Django/PostgreSQL checks and required-check name described below.
 
 ## Running one packet
 
@@ -120,9 +145,12 @@ Built on 26 September 2026 in a single Codex session with GPT-6 Astra, starting 
 
 ## Watching it run
 
-`scripts/monitor/` is a read-only page over the evidence directories: liveness, budgets, the
-queue, each packet's checks, review and claim, and the reason a run stopped. It reads only, binds
-loopback only, and needs nothing but the standard library and one HTML file.
+`scripts/monitor/` is a local control surface over the evidence directories: liveness, budgets, the
+queue, each packet's checks, review and claim, and the reason a run stopped. Its evidence collector
+does not modify source logs; the server binds loopback only and needs nothing but the standard
+library and one HTML file. Explicit controls can write the loop's `STOP` file or a phase's
+owner-decisions file, and can invoke the phase runner's bounded `run`, `review` and `correct`
+commands.
 
 ```
 python3 scripts/monitor/serve.py --directory ~/.local/share/storehouse-runner --directory ~/.local/share/proof-hardware-phases
@@ -130,6 +158,8 @@ python3 scripts/monitor/serve.py --directory ~/.local/share/storehouse-runner --
 
 Point `--directory` at one run, or at a folder of them, and repeat the flag for more trees; the
 page lists every run it finds, newest first. It understands both the coding loop's checkpoints
-and the phase runner's log (`scripts/phases/`). Its only writes are the `STOP` file both loops
-honour and, for phase runs, launching the runner's own `run`, `review` and `correct` commands.
-Its plan and mockup are in `docs/monitor/`.
+and the phase runner's log (`scripts/phases/`). Its only writes are explicit operator actions: the
+`STOP` file both loops honour, phase owner decisions, and launching the runner's own `run`,
+`review` and `correct` commands. Its plan and mockup are in `docs/monitor/`.
+
+![A completed nine-phase website run with its build and review timeline](docs/screenshots/completed-run.png)

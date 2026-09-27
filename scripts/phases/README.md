@@ -2,9 +2,10 @@
 
 `run_phases.sh` drives a phased build the way the coding loop drives packets: one fresh headless
 Claude session per phase prompt, in order, then an independent review of the phase's pull request,
-with blocking findings sent back to a bounded number of correction sessions. Nothing is merged by
-the loop; it stops after each phase that leaves a PR open, and the owner merges after reading the
-review. A phase counts as done when its row in the status file on the base branch says `done`.
+with blocking findings sent back to a bounded number of correction sessions. By default it stops
+with the reviewed PR open for the owner. With `AUTO_MERGE=1`, every reviewed-clean phase except the
+last is merged and the next phase starts; the last PR is always left for the owner. A phase counts
+as done when its row in the status file on the base branch says `done`.
 
 This directory is the canonical copy. The installed copy lives in the run's evidence directory
 (for the Proof Hardware website, `~/.local/share/proof-hardware-phases/`) beside the logs it writes.
@@ -35,6 +36,7 @@ BASE_BRANCH=staging
 STATUS_FILE=docs/orchestration-prompts/website/STATUS.md
 SITE="a static Astro website that sells server RAM"
 PHASES="01 02 03"
+AUTO_MERGE=1
 ```
 
 The reviewer and correction prompts are templates in `prompts/`, with `{{PR}}`, `{{BRANCH}}`,
