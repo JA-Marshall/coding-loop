@@ -34,6 +34,42 @@ class PatchFormatError(RunnerError):
     """Rejected before mutation; eligible for bounded format/context correction."""
 
 
+PATCH_FORMAT_HELP = (
+    "This is a problem with how the change was delivered, not a verdict on the change: keep your approach "
+    "and resend the whole change as a valid `git diff`. Each changed file starts at column 0 with "
+    "`diff --git a/PATH b/PATH`, `--- a/PATH`, `+++ b/PATH`, then `@@` hunks whose every line starts with "
+    "a space, `-` or `+`. Copy context lines exactly from the current snapshot.")
+FOREIGN_HEADER = re.compile(r"^\*\*\* (Begin Patch|End Patch|Update File:|Add File:|Delete File:|Move to:|a/|\S+\t)", re.M)
+
+
+def patch_feedback(summary, patch, exc):
+    """Correction text for a rejected patch: what git said, the offending lines, and the likely fix."""
+    detail = " ".join((getattr(exc, "stderr", "") or "").split())[:600]
+    parts = [summary]
+    if detail:
+        parts.append("git apply said (untrusted data): " + detail)
+    lines = patch.splitlines()
+    match = re.search(r"at line (\d+)", detail)
+    if match and 0 < int(match.group(1)) <= len(lines):
+        n = int(match.group(1))
+        excerpt = "\n".join(f"{i}: {lines[i - 1][:200]}" for i in range(max(1, n - 2), n + 1))
+        parts.append("Your patch around that line:\n" + excerpt)
+    if FOREIGN_HEADER.search(patch):
+        parts.append("Your patch contains `***` header lines: the `*** Begin Patch` / `*** Update File:` envelope "
+                     "from another tool, or context-diff headers. This supervisor applies patches with `git apply`, "
+                     "which accepts neither; write each file as a unified diff instead.")
+    if re.search(r"^[ \t]+(diff --git |--- a/|\+\+\+ b/)", patch, re.M):
+        parts.append("A file header line (`diff --git`, `--- a/` or `+++ b/`) is indented, so git reads it as a "
+                     "context line of the previous hunk; file headers must start at column 0.")
+    if "without header" in detail:
+        parts.append("An `@@` hunk appears before the `--- a/PATH` / `+++ b/PATH` headers of its file.")
+    if "patch does not apply" in detail:
+        parts.append("git could not find the hunk's context and removed lines in the named file at the named "
+                     "line. Re-read that file in the current snapshot and copy those lines exactly.")
+    parts.append(PATCH_FORMAT_HELP)
+    return "\n\n".join(parts)
+
+
 CONTROL_PATHS = (
     ".git", ".codex", ".agents", ".claude", ".github", "AGENTS.md", "CLAUDE.md", "PLANS.md",
     "docs/plans", "docs/projects", "scripts/coordination",
@@ -78,7 +114,9 @@ def git(root, *args, data=None):
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RunnerError("Git operation unavailable or timed out") from exc
     if result.returncode:
-        raise RunnerError("Git operation failed: " + args[0])
+        error = RunnerError("Git operation failed: " + args[0])
+        error.stderr = result.stderr.decode("utf-8", "replace")
+        raise error
     return result.stdout
 
 
@@ -316,7 +354,8 @@ def apply_patch(root, patch, owned):
     try:
         statistics = git(root, "apply", "--recount", "--numstat", "-z", data=data)
     except RunnerError as exc:
-        raise PatchFormatError("Patch is not a parseable unified diff; return a complete textual diff") from exc
+        raise PatchFormatError(patch_feedback(
+            "Patch is not a parseable unified diff; return a complete textual diff", patch, exc)) from exc
     for entry in statistics.split(b"\0"):
         if not entry:
             continue
@@ -337,7 +376,9 @@ def apply_patch(root, patch, owned):
     try:
         git(root, "apply", "--recount", "--check", "--whitespace=error", data=data)
     except RunnerError as exc:
-        raise PatchFormatError("Patch context or whitespace failed validation; reread the current target and return a corrected diff") from exc
+        raise PatchFormatError(patch_feedback(
+            "Patch context or whitespace failed validation; reread the current target and return a corrected diff",
+            patch, exc)) from exc
     git(root, "apply", "--recount", "--whitespace=error", data=data)
     return sorted(set(names))
 
@@ -528,7 +569,7 @@ class Runner:
                             apply_patch(self.root, result["patch"], self.packet["owned_files"])
                         except PatchFormatError as exc:
                             self.assert_candidate()
-                            self.correct(str(exc), "patch_failed", triage=False)
+                            self.correct(str(exc), "patch_failed", triage=False, patch=result["patch"])
                             continue
                         self.checkpoint(phase="CHECKS", candidate=fingerprint(self.root))
                     elif phase == "CHECKS":
@@ -643,7 +684,7 @@ class Runner:
                 or not all(valid_finding(v) for v in result["findings"])):
             raise RunnerError("Review is malformed, stale or missing full coverage")
 
-    def correct(self, feedback, cause, *, triage=True):
+    def correct(self, feedback, cause, *, triage=True, patch=None):
         if self.state["corrections"] >= self.packet["max_corrections"]:
             raise RunnerError("Correction budget exhausted", category="corrections_exhausted")
         if triage and self.packet["luna_triage"]:
@@ -655,8 +696,10 @@ class Runner:
             if decision["action"] == "STOP":
                 raise RunnerError("Luna requested stronger primary review; inspect coordinator result", category="other")
         # Candidate included: changed code with the same failed check isn't an
-        # identical attempt. Overall budgets still cap every correction loop.
-        signature = digest((self.state["candidate"] + feedback).encode())
+        # identical attempt. A rejected patch never changes the candidate, so its
+        # text is included too: a different broken patch isn't a repeat either.
+        # Overall budgets still cap every correction loop.
+        signature = digest((self.state["candidate"] + feedback + (patch or "")).encode())
         if signature == self.state.get("failure_signature"):
             raise RunnerError("Repeated failure; stronger primary review required", category="corrections_exhausted")
         # Recorded for later analysis only; the loop never reads it back. "call" is the model call

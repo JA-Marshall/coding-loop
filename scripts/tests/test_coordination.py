@@ -12,7 +12,7 @@ import unittest
 
 from scripts.coordination.hooks import respond
 from scripts.coordination.runner import (
-    CodexAdapter, Runner, RunnerError, apply_patch, authorize_live, checkout_lock,
+    CodexAdapter, PatchFormatError, Runner, RunnerError, apply_patch, authorize_live, checkout_lock,
     fingerprint, git, main, reviewer_model, save_json, validate_packet,
 )
 
@@ -193,6 +193,36 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(state["calls"], 3)
         self.assertEqual(state["corrections"], 1)
         self.assertEqual(adapter.roles, ["worker", "worker", "reviewer"])
+
+    def test_patch_feedback_quotes_git_and_names_foreign_headers(self):
+        envelope = "*** Begin Patch\n*** Update File: sample.txt\n@@ -1 +1 @@\n-old\n+new\n*** End Patch\n"
+        with self.assertRaises(PatchFormatError) as caught:
+            apply_patch(self.root, envelope, ["sample.txt"])
+        feedback = str(caught.exception)
+        self.assertIn("git apply said", feedback)
+        self.assertIn("`*** Begin Patch`", feedback)
+        self.assertIn("not a verdict on the change", feedback)
+        indented = PATCH + " " + PATCH.replace("sample.txt", "other.txt")
+        with self.assertRaises(PatchFormatError) as caught:
+            apply_patch(self.root, indented, ["sample.txt", "other.txt"])
+        self.assertIn("is indented", str(caught.exception))
+        self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
+
+    def test_a_different_broken_patch_is_not_a_repeated_failure(self):
+        broken = ["not a diff", "*** Begin Patch\nstill not a diff"]
+        def worker(runner, role, feedback):
+            result = Adapter()(runner, role, feedback)
+            if role == "worker" and broken:
+                result["patch"] = broken.pop(0)
+            return result
+        state = self.runner(worker).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(state["corrections"], 2)
+
+    def test_the_same_broken_patch_twice_is_a_repeated_failure(self):
+        state = self.runner(lambda *_: {"patch": "not a diff", "summary": "broken"}).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertEqual(state["reason"], "Repeated failure; stronger primary review required")
 
     def test_bad_patch_exhaustion_retains_counters(self):
         self.packet["max_corrections"] = 1
