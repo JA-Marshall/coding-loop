@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -125,6 +126,39 @@ class DerivedTests(unittest.TestCase):
         state = Runner(self.loop_packet(root, max_corrections=0), self.home / "run", Worker(wrong)).run()
         self.assertEqual((state["phase"], state["reason"]), ("STOPPED", "Correction budget exhausted"))
         self.assertEqual(state["checks"]["results"][0]["exit_code"], 1)
+
+    def improving(self):
+        """A worker whose first two answers fail the hidden test and whose third passes it."""
+        def step(old, new):
+            return (f"diff --git a/product.py b/product.py\n--- a/product.py\n+++ b/product.py\n@@ -1,2 +1,2 @@\n"
+                    f" def double(value):\n-    return {old}\n+    return {new}\n")
+        steps = [step("value", "value + 0"), step("value + 0", "value + 1"), step("value + 1", "value * 2")]
+        class Improving(Worker):
+            def __call__(self, runner, role, feedback):
+                if role == "worker":
+                    self.patch_text = steps[self.roles.count("worker")]
+                return super().__call__(runner, role, feedback)
+        return Improving()
+
+    def test_failed_hidden_checks_have_their_own_correction_rounds(self):
+        root = self.prepared()
+        adapter = self.improving()
+        # Review rounds are spent, but failed checks draw on their own budget.
+        state = Runner(self.loop_packet(root, max_corrections=0, max_check_corrections=2), self.home / "run", adapter).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual((state["corrections"], state["check_corrections"]), (0, 2))
+        self.assertEqual(adapter.roles, ["worker", "worker", "worker", "reviewer"])
+        self.assertEqual([e["cause"] for e in state["corrections_log"]], ["check_failed", "check_failed"])
+        for number in range(3):  # each round's check log is kept
+            self.assertTrue((self.home / "run" / f"check-{number}-hidden-tests.log").is_file())
+
+    def test_the_check_budget_stops_an_attempt_that_review_rounds_would_not(self):
+        root = self.prepared()
+        state = Runner(self.loop_packet(root, max_corrections=2, max_check_corrections=1), self.home / "run",
+                       self.improving()).run()
+        self.assertEqual((state["phase"], state["reason"], state["stop_category"]),
+                         ("STOPPED", "Check correction budget exhausted", "corrections_exhausted"))
+        self.assertEqual((state["corrections"], state["check_corrections"]), (0, 1))
 
     def test_overlay_creates_and_removes_new_files_and_is_restored_when_the_check_raises(self):
         root = self.prepared()
@@ -267,7 +301,9 @@ class DerivedTests(unittest.TestCase):
         muse = self.directory / "attempts" / "gpt-5-6-terra-medium--meta-muse-spark-1-3-contributor-medium"
         packet = json.loads((muse / "packet.json").read_text())
         # A packet made without the flags records no reviewer and keeps the default limits.
-        self.assertEqual(({"reviewer_model", "reviewer_reasoning"} & default.keys(), default["total_timeout"]), (set(), 7200))
+        self.assertEqual(({"reviewer_model", "reviewer_reasoning"} & default.keys(), default["total_timeout"]), (set(), 14400))
+        # Failed hidden checks get their own rounds; the call budget is raised to cover them.
+        self.assertEqual((default["max_check_corrections"], default["max_corrections"], default["max_calls"]), (5, 2, 12))
         self.assertEqual((packet["reviewer_model"], packet["reviewer_reasoning"], packet["total_timeout"], packet["max_corrections"]),
                          ("meta/muse-spark-1.3-contributor", "medium", 30000, 1))
         state = json.loads((muse / "run" / "state.json").read_text())

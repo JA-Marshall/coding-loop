@@ -164,6 +164,7 @@ def fingerprint(root):
 # Patches that git cannot apply get this many corrections outside max_corrections: models
 # trained on other patch formats need a round or two to adapt. max_calls still caps them.
 FORMAT_RETRIES = 2
+MAX_CHECK_CORRECTIONS = 10
 LIMITS = {"max_corrections": (2, 0, 2), "max_calls": (6, 1, 7),
           "call_timeout": (2700, 1, 2700), "total_timeout": (28800, 1, 28800)}
 
@@ -173,7 +174,8 @@ def validate_packet(packet, ceilings=None):
     `ceilings` (never the packet) can raise a cap."""
     required = {"id", "checkout", "base_sha", "branch", "objective", "acceptance",
                 "owned_files", "checks", "worker_model", "worker_reasoning", "plan"}
-    optional = {"max_corrections", "max_calls", "call_timeout", "total_timeout", "luna_triage", "advisory_review",
+    optional = {"max_corrections", "max_check_corrections", "max_calls", "call_timeout", "total_timeout",
+                "luna_triage", "advisory_review",
                 "hidden_overlay", "reviewer_model", "reviewer_reasoning"}
     if not isinstance(packet, dict) or not required <= packet.keys() or packet.keys() - required - optional:
         raise RunnerError("Packet fields do not match the documented contract")
@@ -230,6 +232,12 @@ def validate_packet(packet, ceilings=None):
         value = packet.setdefault(key, default)
         if type(value) is not int or not low <= value <= high:
             raise RunnerError("Invalid bounded limit: " + key)
+    # Rounds for failed checks, charged apart from max_corrections. Absent means failed checks share
+    # max_corrections, as before; nothing is filled in, so older packets keep their hash. max_calls
+    # and total_timeout still cap every round.
+    if "max_check_corrections" in packet and (type(packet["max_check_corrections"]) is not int
+                                              or not 0 <= packet["max_check_corrections"] <= MAX_CHECK_CORRECTIONS):
+        raise RunnerError("Invalid bounded limit: max_check_corrections")
     return packet
 
 
@@ -323,6 +331,9 @@ def failure_excerpt(log_path, limit):
         lines = Path(log_path).read_text(errors="replace").splitlines()
     except OSError:
         return "(check log unavailable)"
+    sections = pytest_failures(lines, limit)
+    if sections is not None:
+        return sections
     start = next((i for i, line in enumerate(lines) if line.startswith(("FAIL: ", "ERROR: "))), None)
     if start is not None:
         start = max(start - 1, 0) if start and lines[start - 1].startswith("=====") else start
@@ -334,6 +345,58 @@ def failure_excerpt(log_path, limit):
         half = max(limit // 2 - 20, 0)
         text = text[:half] + "\n...[truncated]...\n" + text[-half:]
     return text
+
+
+PYTEST_BANNER = re.compile(r"^=+ (FAILURES|ERRORS) =+$")
+PYTEST_TEST = re.compile(r"^_{3,} .+ _{3,}$")
+PYTEST_SUMMARY = re.compile(r"^=+ short test summary info =+$")
+PYTEST_CAPTURED = re.compile(r"^-+ Captured .+ -+$")
+
+
+def pytest_failures(lines, limit):
+    """A pytest log's failure sections, shared out across the failing tests, or None if it has none.
+
+    Each test keeps the end of its traceback (the E lines and where it failed) and, from any captured
+    output, the start of the last unified diff there (the first mismatches of an expected/actual
+    comparison), or else the output's end. The short summary, naming every failing test, comes first.
+    """
+    start = next((i for i, line in enumerate(lines) if PYTEST_BANNER.match(line)), None)
+    if start is None:
+        return None
+    end = next((i for i in range(start, len(lines)) if PYTEST_SUMMARY.match(lines[i])), len(lines))
+    summary = "\n".join(lines[end:])[:limit // 4]
+    tests, current = [], None
+    for line in lines[start + 1:end]:
+        if PYTEST_TEST.match(line) or PYTEST_BANNER.match(line):
+            current = [line]
+            tests.append(current)
+        elif current is not None:
+            current.append(line)
+    if not tests:
+        return None
+    share = max((limit - len(summary)) // len(tests) - 2, 200)
+    parts = [summary] if summary else []
+    for test in tests:
+        cut = next((i for i, line in enumerate(test) if PYTEST_CAPTURED.match(line)), len(test))
+        trace, captured = test[:cut], test[cut:]
+        trace_text = "\n".join(trace)
+        room = share if not captured else share // 2
+        if len(trace_text) > room:
+            trace_text = test[0] + "\n...[truncated]...\n" + trace_text[-(room - len(test[0]) - 20):]
+        part = trace_text
+        if captured:
+            diff = [i for i in range(len(captured) - 1)
+                    if captured[i].startswith("--- ") and captured[i + 1].startswith("+++ ")]
+            room = max(share - len(trace_text) - len(captured[0]) - 2 - len("\n...[truncated]..."), 0)
+            if diff:
+                text = "\n".join(captured[diff[-1]:])
+                text = text[:room] + ("\n...[truncated]..." if len(text) > room else "")
+            else:
+                text = "\n".join(captured)
+                text = ("...[truncated]...\n" + text[len(text) - room:]) if len(text) > room else text
+            part += "\n" + captured[0] + "\n" + text
+        parts.append(part)
+    return "\n\n".join(parts)[:limit]
 
 
 def check_failure_feedback(checks):
@@ -754,10 +817,10 @@ class Runner:
                         for check in self.packet["checks"]:
                             with self.hidden_checks():
                                 code = self.command(check["argv"], check["timeout"],
-                                                    f"check-{self.state['corrections']}-{check['id']}")
+                                                    f"check-{self.rounds()}-{check['id']}")
                             self.assert_candidate()
                             checks.append({"id": check["id"], "exit_code": code,
-                                           "log": str(self.run_dir / f"check-{self.state['corrections']}-{check['id']}.log")})
+                                           "log": str(self.run_dir / f"check-{self.rounds()}-{check['id']}.log")})
                         self.checkpoint(checks={"candidate": self.state["candidate"], "results": checks})
                         if any(c["exit_code"] for c in checks):
                             self.correct(check_failure_feedback(checks), "check_failed")
@@ -862,9 +925,17 @@ class Runner:
                 or not all(valid_finding(v) for v in result["findings"])):
             raise RunnerError("Review is malformed, stale or missing full coverage")
 
+    def rounds(self):
+        """Charged correction rounds so far, of either budget: numbers each round's check logs."""
+        return self.state["corrections"] + self.state.get("check_corrections", 0)
+
     def correct(self, feedback, cause, *, triage=True, patch=None):
         free = cause == "patch_failed" and self.state.get("format_retries", 0) < FORMAT_RETRIES
-        if not free and self.state["corrections"] >= self.packet["max_corrections"]:
+        own = cause == "check_failed" and "max_check_corrections" in self.packet
+        if own:
+            if self.state.get("check_corrections", 0) >= self.packet["max_check_corrections"]:
+                raise RunnerError("Check correction budget exhausted", category="corrections_exhausted")
+        elif not free and self.state["corrections"] >= self.packet["max_corrections"]:
             raise RunnerError("Correction budget exhausted", category="corrections_exhausted")
         if triage and self.packet["luna_triage"]:
             decision = self.model("coordinator", feedback)
@@ -888,7 +959,8 @@ class Runner:
         entry = {"round": len(log) + 1, "cause": cause, "call": self.state["calls"], "at": time.time()}
         if free:
             entry["format_retry"] = True
-        self.checkpoint(phase="IMPLEMENT", corrections=self.state["corrections"] + (0 if free else 1),
+        self.checkpoint(phase="IMPLEMENT", corrections=self.state["corrections"] + (0 if free or own else 1),
+                        check_corrections=self.state.get("check_corrections", 0) + (1 if own else 0),
                         format_retries=self.state.get("format_retries", 0) + (1 if free else 0),
                         corrections_log=log + [entry], feedback=feedback, failure_signature=signature)
 

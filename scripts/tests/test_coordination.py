@@ -497,6 +497,30 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("line 499", excerpt)
         self.assertEqual(failure_excerpt(self.home / "missing.log", 1000), "(check log unavailable)")
 
+    def test_a_pytest_log_gives_every_failing_test_its_traceback_end_and_the_start_of_its_diff(self):
+        from scripts.coordination.runner import failure_excerpt
+        def failure(name, noise):
+            return ([f"________________ {name} ________________", "    def test(): ..."] + ["    source"] * noise
+                    + [f"E       AssertionError: {name} broke", f"tests/test_x.py:9: AssertionError",
+                       "----------------------------- Captured stderr call -----------------------------",
+                       "--- expected tree", "+++ actual tree"] + ["  tree noise"] * noise
+                    + ["--- expected", "+++ actual", f"@@ first mismatch in {name} @@"] + [" diff line"] * noise)
+        lines = (["F.F", "=================================== FAILURES ==================================="]
+                 + failure("test_one", 400) + failure("test_two", 400)
+                 + ["=========================== short test summary info ============================",
+                    "FAILED tests/test_x.py::test_one - AssertionError", "FAILED tests/test_x.py::test_two - AssertionError",
+                    "2 failed in 0.1s"])
+        log = self.home / "pytest.log"
+        log.write_text("\n".join(lines))
+        excerpt = failure_excerpt(log, 4000)
+        self.assertLessEqual(len(excerpt), 4000)
+        self.assertTrue(excerpt.startswith("=== short test summary info") or "short test summary" in excerpt.splitlines()[0])
+        for name in ("test_one", "test_two"):
+            self.assertIn(f"FAILED tests/test_x.py::{name}", excerpt)
+            self.assertIn(f"E       AssertionError: {name} broke", excerpt)
+            self.assertIn(f"@@ first mismatch in {name} @@", excerpt)
+        self.assertNotIn("tree noise", excerpt)
+
     def test_empty_worker_patch_stops_with_its_blocker_summary(self):
         def blocked(runner, role, feedback):
             return {"patch": "", "summary": "Blocked: the failing test output is not visible."}

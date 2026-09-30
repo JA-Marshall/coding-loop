@@ -40,10 +40,13 @@ import sys
 
 from .isolated import IsolatedAdapter
 from .native import NativeAdapter
-from .runner import REVIEW_MODEL, Runner, RunnerError, git, hidden_overlay, save_json, validate_packet
+from .runner import LIMITS, REVIEW_MODEL, Runner, RunnerError, git, hidden_overlay, save_json, validate_packet
 
 PLAN = "derived-from-merged-pull-request"
-DEFAULT_LIMITS = {"max_calls": 6, "max_corrections": 2, "call_timeout": 1800, "total_timeout": 7200}
+# Failed hidden checks get their own rounds (max_check_corrections); review findings keep max_corrections.
+# Worst case: 1 + 5 worker calls on failed checks, then a review and 2 review rounds of worker and reviewer: 11.
+DEFAULT_LIMITS = {"max_calls": 12, "max_corrections": 2, "max_check_corrections": 5, "call_timeout": 1800,
+                  "total_timeout": 14400}
 LOOP_FIELDS = ("id", "base_sha", "branch", "objective", "acceptance", "owned_files", "checks")
 
 
@@ -203,9 +206,10 @@ def run(args):
     attempt.mkdir(mode=0o700, parents=True)
     clone_at_base(Path(record["source"]), attempt / "checkout", packet)
     limits = {"max_calls": args.max_calls, "max_corrections": args.max_corrections,
+              "max_check_corrections": args.max_check_corrections,
               "call_timeout": args.call_timeout, "total_timeout": args.total_timeout}
     # The launcher, not the packet, decides how far a limit may be raised: the flag is its own ceiling.
-    ceilings = {key: value for key, value in limits.items() if value != DEFAULT_LIMITS[key]}
+    ceilings = {key: value for key, value in limits.items() if key in LIMITS}
     loop_packet = validate_packet(dict(
         {key: packet[key] for key in LOOP_FIELDS}, checkout=str(attempt / "checkout"),
         checks=bound_checks(packet, validation["python"]), hidden_overlay=str(directory / "hidden"),
@@ -246,6 +250,7 @@ def main(argv=None):
     command.add_argument("--reviewer-model", help="primary reviewer model, e.g. claude-opus-5-5 or meta/<id> in Codex (default: the loop's pinned reviewer)")
     command.add_argument("--reviewer-reasoning", help="the reviewer's effort (default: the loop's pinned effort)")
     for flag, key in (("max-calls", "max_calls"), ("max-corrections", "max_corrections"),
+                      ("max-check-corrections", "max_check_corrections"),
                       ("call-timeout", "call_timeout"), ("total-timeout", "total_timeout")):
         command.add_argument("--" + flag, type=int, default=DEFAULT_LIMITS[key],
                              help=f"limit (default {DEFAULT_LIMITS[key]}); a value above the loop's ceiling raises it for this launch only")
