@@ -6,6 +6,7 @@ operator-supplied checks. Check commands are trusted code, not a security sandbo
 from __future__ import annotations
 
 import argparse
+import difflib
 from contextlib import contextmanager, nullcontext
 import fcntl
 import hashlib
@@ -345,9 +346,158 @@ def check_failure_feedback(checks):
     return "\n\n".join(parts)
 
 
-def apply_patch(root, patch, owned):
+ENVELOPE_FILE = re.compile(r"^\*\*\* (Update|Add|Delete) File: (.+?)\s*$")
+ENVELOPE_MARK = re.compile(r"^\*\*\* (Begin Patch|End Patch|End of File)\s*$")
+INDENTED_HEADER = re.compile(r"^[ \t]+(?=diff --git a/\S+ b/\S+$|--- (a/|/dev/null)|\+\+\+ (b/|/dev/null))")
+
+
+def find_block(lines, block, start):
+    """First index at or after start where block matches lines, exactly, then ignoring trailing, then all outer whitespace."""
+    for same in (lambda a, b: a == b, lambda a, b: a.rstrip() == b.rstrip(), lambda a, b: a.strip() == b.strip()):
+        for i in range(start, len(lines) - len(block) + 1):
+            if all(same(lines[i + k], block[k]) for k in range(len(block))):
+                return i
+    return None
+
+
+def place_hunks(old, body):
+    """An envelope's `@@` hunks placed by their context in old; the new lines, or None if any hunk cannot be placed."""
+    hunks = []
+    for line in body:
+        if line.startswith("@@"):
+            # A numbered git hunk header carries a function name, not a line; placement follows context alone.
+            hunks.append(("" if re.match(r"^@@ -\d", line) else line.strip("@ \t"), []))
+        else:
+            if not hunks:
+                hunks.append(("", []))
+            hunks[-1][1].append(line)
+    new, position = list(old), 0
+    for anchor, lines in hunks:
+        parts = [(line[:1] or " ", line[1:]) for line in lines]
+        if any(tag not in " -+" for tag, _ in parts):
+            return None
+        before = [text for tag, text in parts if tag != "+"]
+        if not before:
+            return None if any(tag == "+" for tag, _ in parts) else new
+        start = position
+        if anchor:
+            found = next((i for i in range(position, len(new)) if new[i].strip() == anchor.strip()), None)
+            start = found if found is not None else position
+        at = find_block(new, before, start)
+        if at is None and start != position:
+            at = find_block(new, before, position)
+        if at is None:
+            return None
+        # Context keeps the file's own text, so a fuzzy match never rewrites unchanged lines.
+        replaced, k = [], at
+        for tag, text in parts:
+            if tag == " ":
+                replaced.append(new[k]); k += 1
+            elif tag == "-":
+                k += 1
+            else:
+                replaced.append(text)
+        new[at:k] = replaced
+        position = at + len(replaced)
+    return new
+
+
+def envelope_to_diff(root, patch):
+    """A patch that uses Codex's `*** Begin Patch` envelope, alone or mixed with git sections, rebuilt as a git diff.
+
+    Each file's hunks are placed by their context in the file under root; hunk line numbers are ignored. None when
+    a section uses something this repair does not know (a rename, a stray line) or a hunk cannot be placed.
+    """
+    sections = []                           # [operation, path, header still open, body lines]
+    for line in patch.splitlines():
+        git_header = re.match(r"^diff --git a/(\S+) b/\S+\s*$", line)
+        envelope = ENVELOPE_FILE.match(line)
+        if git_header or envelope:
+            sections.append(["Update", git_header.group(1), True, []] if git_header
+                            else [envelope.group(1), envelope.group(2), True, []])
+            continue
+        if ENVELOPE_MARK.match(line):
+            continue
+        if line.startswith("*** ") or (not sections and line.strip()):
+            return None
+        if not sections:
+            continue
+        section = sections[-1]
+        if section[2] and re.match(r"^(index |old mode |new mode |similarity |--- a/|\+\+\+ b/)", line):
+            continue
+        if section[2] and re.match(r"^(new file mode |--- /dev/null)", line):
+            section[0] = "Add"; continue
+        if section[2] and re.match(r"^(deleted file mode |\+\+\+ /dev/null)", line):
+            section[0] = "Delete"; continue
+        if line.startswith("@@"):
+            section[2] = False
+        section[3].append(line)
+    out = []
+    for operation, path, _, body in sections:
+        try:
+            name = relative_file(path.strip())
+        except RunnerError:
+            return None
+        target = root / name
+        if operation == "Add":
+            body = [line for line in body if not line.startswith("@@")]
+            if target.exists() or any(line and not line.startswith("+") for line in body):
+                return None
+            added = [line[1:] for line in body]
+            out.append(f"diff --git a/{name} b/{name}\nnew file mode 100644\n--- /dev/null\n+++ b/{name}\n"
+                       f"@@ -0,0 +1,{len(added)} @@\n" + "".join(f"+{line}\n" for line in added))
+            continue
+        try:
+            text = target.read_text()
+        except (OSError, UnicodeDecodeError):
+            return None
+        if "\r" in text or (text and not text.endswith("\n")):
+            return None
+        old = text.splitlines()
+        if operation == "Delete":
+            out.append(f"diff --git a/{name} b/{name}\ndeleted file mode 100644\n--- a/{name}\n+++ /dev/null\n"
+                       f"@@ -1,{len(old)} +0,0 @@\n" + "".join(f"-{line}\n" for line in old))
+            continue
+        new = place_hunks(old, body)
+        if new is None:
+            return None
+        diff = list(difflib.unified_diff(old, new, f"a/{name}", f"b/{name}", lineterm=""))
+        if diff:
+            out.append(f"diff --git a/{name} b/{name}\n" + "\n".join(diff) + "\n")
+    return "".join(out) or None
+
+
+def repair_patch(root, patch):
+    """Mechanical repairs for patch dialects models emit, as (what was repaired, patch); None when none applies."""
+    if any(ENVELOPE_FILE.match(line) for line in patch.splitlines()):
+        repaired = envelope_to_diff(root, patch)
+        return ("codex envelope", repaired) if repaired else None
+    lines = [line for line in patch.splitlines() if not ENVELOPE_MARK.match(line)]
+    lines = [INDENTED_HEADER.sub("", line) for line in lines]
+    repaired = "\n".join(lines) + "\n"
+    return ("stray header whitespace or envelope markers", repaired) if repaired.strip() != patch.strip() else None
+
+
+def apply_patch(root, patch, owned, repairs=None):
+    """Apply the worker's patch; if git rejects its format, try one mechanical repair before giving up."""
     if not isinstance(patch, str) or not patch.strip() or len(patch) > 2_000_000:
         raise RunnerError("Missing or oversized patch")
+    try:
+        return apply_git_patch(root, patch, owned)
+    except PatchFormatError as original:
+        repair = repair_patch(root, patch)
+        if repair is None:
+            raise
+        try:
+            names = apply_git_patch(root, repair[1], owned)
+        except PatchFormatError:
+            raise original from None
+        if repairs is not None:
+            repairs.append(repair[0])
+        return names
+
+
+def apply_git_patch(root, patch, owned):
     data = patch.encode()
     if any(line.startswith(prefix) for line in patch.splitlines()
            for prefix in ("old mode ", "new mode ", "new file mode 120", "new file mode 160",
@@ -568,8 +718,12 @@ class Runner:
                             # The worker reports a blocker instead of a patch; surface its reason.
                             raise RunnerError("Worker returned no patch: " + " ".join(result["summary"].split())[:500], category="no_patch")
                         self.checkpoint(phase="APPLYING")
+                        repairs = []
                         try:
-                            apply_patch(self.root, result["patch"], self.packet["owned_files"])
+                            apply_patch(self.root, result["patch"], self.packet["owned_files"], repairs)
+                            if repairs:
+                                self.checkpoint(patch_repairs=self.state.get("patch_repairs", [])
+                                                + [{"call": self.state["calls"], "repair": repairs[0]}])
                         except PatchFormatError as exc:
                             self.assert_candidate()
                             self.correct(str(exc), "patch_failed", triage=False, patch=result["patch"])
@@ -654,7 +808,8 @@ class Runner:
                 "phase": state["phase"], "corrections_log": state.get("corrections_log", []),
                 "stop_category": state.get("stop_category"), "reason": reason, "timeline": state.get("timeline", []),
                 "usage": state.get("usage", []), "checks": checks,
-                "blocking_findings": len(blocking_findings(state.get("review") or {})), "loop_version": loop_version}
+                "blocking_findings": len(blocking_findings(state.get("review") or {})), "loop_version": loop_version,
+                "patch_repairs": state.get("patch_repairs", [])}
 
     def log_attempt(self):
         """Append the attempt's one line. A crash between the append and the checkpoint below repeats

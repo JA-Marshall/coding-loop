@@ -195,18 +195,70 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(adapter.roles, ["worker", "worker", "reviewer"])
 
     def test_patch_feedback_quotes_git_and_names_foreign_headers(self):
-        envelope = "*** Begin Patch\n*** Update File: sample.txt\n@@ -1 +1 @@\n-old\n+new\n*** End Patch\n"
+        envelope = "*** Begin Patch\n*** Update File: sample.txt\n@@\n-not in the file\n+new\n*** End Patch\n"
         with self.assertRaises(PatchFormatError) as caught:
             apply_patch(self.root, envelope, ["sample.txt"])
         feedback = str(caught.exception)
         self.assertIn("git apply said", feedback)
         self.assertIn("`*** Begin Patch`", feedback)
         self.assertIn("not a verdict on the change", feedback)
-        indented = PATCH + " " + PATCH.replace("sample.txt", "other.txt")
+        (self.root / "other.txt").write_text("old\n")
+        indented = PATCH + " diff --git a/other.txt b/other.txt\n--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-missing\n+new\n"
         with self.assertRaises(PatchFormatError) as caught:
             apply_patch(self.root, indented, ["sample.txt", "other.txt"])
         self.assertIn("is indented", str(caught.exception))
         self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
+
+    def test_an_indented_file_header_is_repaired(self):
+        (self.root / "other.txt").write_text("old\n")
+        repairs = []
+        # As gpt-6.1-sol writes it: the next file's header lands after a space, with no index line.
+        second = "diff --git a/other.txt b/other.txt\n--- a/other.txt\n+++ b/other.txt\n@@ -1 +1 @@\n-old\n+new\n"
+        indented = PATCH + " " + second + "*** End Patch\n"
+        self.assertEqual(apply_patch(self.root, indented, ["sample.txt", "other.txt"], repairs), ["other.txt", "sample.txt"])
+        self.assertEqual(((self.root / "sample.txt").read_text(), (self.root / "other.txt").read_text()), ("new\n", "new\n"))
+        self.assertEqual(repairs, ["stray header whitespace or envelope markers"])
+
+    def test_a_codex_envelope_is_placed_by_its_context(self):
+        (self.root / "code.py").write_text("def a():\n    return 1\n\n\ndef b():\n    return 1\n")
+        envelope = ("*** Begin Patch\n*** Update File: code.py\n@@ def b():\n-    return 1\n+    return 2\n"
+                    "*** Add File: notes.txt\n+first\n+second\n*** End Patch\n")
+        repairs = []
+        self.assertEqual(apply_patch(self.root, envelope, ["code.py", "notes.txt"], repairs), ["code.py", "notes.txt"])
+        self.assertEqual((self.root / "code.py").read_text(), "def a():\n    return 1\n\n\ndef b():\n    return 2\n")
+        self.assertEqual((self.root / "notes.txt").read_text(), "first\nsecond\n")
+        self.assertEqual(repairs, ["codex envelope"])
+
+    def test_a_git_diff_that_switches_to_the_envelope_midway_is_rebuilt(self):
+        # As gpt-5.6-luna writes it: git sections first, then `*** Update File:` with numbered hunks, then `*** End Patch`.
+        (self.root / "code.py").write_text("a = 1\nb = 2\nc = 3\nd = 4\n")
+        mixed = PATCH + "*** Update File: code.py\n@@ -2,2 +2,2 @@ a = 1\n b = 2\n-c = 3\n+c = 30\n*** End Patch\n"
+        repairs = []
+        self.assertEqual(apply_patch(self.root, mixed, ["sample.txt", "code.py"], repairs), ["code.py", "sample.txt"])
+        self.assertEqual(((self.root / "sample.txt").read_text(), (self.root / "code.py").read_text()),
+                         ("new\n", "a = 1\nb = 2\nc = 30\nd = 4\n"))
+        self.assertEqual(repairs, ["codex envelope"])
+
+    def test_a_codex_envelope_keeps_the_files_own_context_and_scope(self):
+        (self.root / "code.py").write_text("x = 1\ny = 2\nz = 3\n")
+        apply_patch(self.root, "*** Begin Patch\n*** Update File: code.py\n x = 1   \n-y = 2\n+y = 20\n z = 3\n*** End Patch\n", ["code.py"])
+        self.assertEqual((self.root / "code.py").read_text(), "x = 1\ny = 20\nz = 3\n")
+        with self.assertRaises(RunnerError):
+            apply_patch(self.root, "*** Begin Patch\n*** Update File: code.py\n-z = 3\n+z = 30\n*** End Patch\n", ["sample.txt"])
+        with self.assertRaises(PatchFormatError):
+            apply_patch(self.root, "*** Begin Patch\n*** Update File: code.py\n*** Move to: moved.py\n*** End Patch\n", ["code.py"])
+        self.assertEqual((self.root / "code.py").read_text(), "x = 1\ny = 20\nz = 3\n")
+
+    def test_a_repaired_patch_is_recorded_in_the_attempt_log(self):
+        def worker(runner, role, feedback):
+            result = Adapter()(runner, role, feedback)
+            if role == "worker":
+                result["patch"] = "*** Begin Patch\n*** Update File: sample.txt\n-old\n+new\n*** End Patch\n"
+            return result
+        state = self.runner(worker).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual((state["corrections_log"], [r["repair"] for r in state["patch_repairs"]]), ([], ["codex envelope"]))
+        self.assertEqual(self.log_lines()[-1]["patch_repairs"], state["patch_repairs"])
 
     def test_a_different_broken_patch_is_not_a_repeated_failure(self):
         broken = ["not a diff", "*** Begin Patch\nstill not a diff"]
