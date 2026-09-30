@@ -605,6 +605,88 @@ valuation_impact: PRESENT - Stock valuation changes.
         self.assertTrue(all(p.get("isolated") for p in state["prompts"]))
         self.assertTrue((self.run_dir / "codex-3").is_dir())  # advisory ran under its own CODEX_HOME
 
+    def fake_muse_cli(self, steps=2):
+        """Fake Muse install beside the fake Claude reviewer: a launcher, its pinned binary and a codex that only sandboxes."""
+        context = self.fake_claude_cli(self.CLAUDE_PATCH, claude_worker=False)
+        fake = self.home / "bin"
+        (fake / "codex").write_text("#!" + sys.executable + "\n" + r"""import os, sys
+from pathlib import Path
+args = sys.argv[1:]
+assert args[:3] == ['sandbox', '-P', 'muse'], 'Codex only sandboxes a Muse worker'
+source, command = args[args.index('-C') + 1], args[args.index('--') + 1:]
+home, profile = os.environ['HOME'], (Path(os.environ['CODEX_HOME']) / 'config.toml').read_text()
+assert Path(home).parent == Path(os.environ['CODEX_HOME'])
+assert '"' + source + '" = "read"' in profile and '"' + home + '" = "write"' in profile
+assert '"' + command[0] + '" = "read"' in profile and profile.count('= "write"') == 1
+assert '[permissions.muse.network]\nenabled = true' in profile
+os.execv(command[0], command)
+""")
+        (fake / "muse").write_text("#!/bin/sh\necho 'the self-updating launcher must not run' >&2\nexit 96\n")
+        (fake / ".muse-version").write_text("9.9.9-R1\n")
+        binary = fake / "muse-bin-9.9.9-R1"
+        binary.write_text("#!" + sys.executable + "\n" + r"""import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+assert args[0] == 'exec'
+for flag in ('--json', '--disable-write', '--disable-shell', '--disable-web-tools', '--no-foreign-personal-context'):
+    assert flag in args, flag
+assert args[args.index('--approval-mode') + 1] == 'never'
+assert args[args.index('--model') + 1] == 'muse-spark-1.3-contributor'
+assert args[args.index('--reasoning-effort') + 1] == 'medium'
+home = Path(os.environ['HOME'])
+assert json.loads((home / '.config/muse/auth.json').read_text()) == {'providers': {'meta': {'api_key': 'fixture'}}}
+for flag in ('--output-schema', '--prompt-file'):
+    assert home in Path(args[args.index(flag) + 1]).parents, flag
+assert 'patch' in json.loads(Path(args[args.index('--output-schema') + 1]).read_text())['properties']
+prompt = Path(args[args.index('--prompt-file') + 1]).read_text()
+assert 'PACKET:' in prompt and args[args.index('--workspace') + 1] in prompt
+def step(tokens_in, cached, out):
+    return json.dumps({'payload': {'event': {'kind': 'model_completed', 'usage': {
+        'input_tokens': tokens_in, 'cached_tokens': cached, 'output_tokens': out, 'reasoning_tokens': 1}}}})
+session = home / '.local/share/muse/sessions/2026/09/30/main'
+(session / 'subagent/helper').mkdir(parents=True)
+(session / 'session.jsonl').write_text('\n'.join([step(1000, 400, 50)] * STEPS + ['not json', json.dumps(
+    {'payload': {'event': {'kind': 'usage_recorded', 'usage': {'input_tokens': 9999, 'output_tokens': 9999}}}})]))
+(session / 'subagent/helper/session.jsonl').write_text(step(30, 0, 5))
+print('muse: workspace root', file=sys.stderr)
+answer = json.dumps({'patch': PATCH_VALUE, 'summary': 'fake Muse patch'})
+print(json.dumps({'payload_type': 'run.terminal.completed', 'payload': {'terminal': 'completed', 'text': answer + answer}}))
+""".replace("PATCH_VALUE", repr(PATCH)).replace("STEPS", str(steps)))
+        for path in (fake / "codex", fake / "muse", binary):
+            path.chmod(0o755)
+        login = self.home / "xdg" / "muse"
+        login.mkdir(parents=True)
+        (login / "auth.json").write_text(json.dumps({"providers": {"meta": {"api_key": "fixture"}}}))
+        self.packet.update(worker_model="muse-spark-1.3-contributor", worker_reasoning="medium")
+        return patch.dict(os.environ, dict(context.values, XDG_CONFIG_HOME=str(self.home / "xdg")))
+
+    def test_isolated_adapter_runs_a_muse_worker_inside_the_codex_sandbox(self):
+        from scripts.coordination.isolated import IsolatedAdapter
+        with self.fake_muse_cli():
+            state = self.runner(IsolatedAdapter(self.home / "no-codex-login")).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(state["pair"]["worker"], "muse:muse-spark-1.3-contributor:medium")
+        # Every model step is counted once, helper sessions included; other usage records are not steps.
+        self.assertEqual(state["usage"][0], {"call": 1, "role": "worker", "reported": [{
+            "input_tokens": 2030, "cached_input_tokens": 800, "output_tokens": 105, "reasoning_output_tokens": 3,
+            "model_steps": 3}]})
+        self.assertEqual((self.root / "sample.txt").read_text(), "new\n")
+        # The copied login does not outlive the call.
+        self.assertTrue((self.run_dir / "muse-1" / "home" / "prompt.txt").is_file())
+        self.assertFalse((self.run_dir / "muse-1" / "home" / ".config" / "muse" / "auth.json").exists())
+
+    def test_a_muse_worker_stops_without_usage_or_outside_the_isolated_adapter(self):
+        from scripts.coordination.isolated import IsolatedAdapter
+        with self.fake_muse_cli(steps=0):
+            (self.home / "bin" / "muse-bin-9.9.9-R1").write_text(
+                (self.home / "bin" / "muse-bin-9.9.9-R1").read_text().replace("(session / 'subagent/helper/session.jsonl').write_text(step(30, 0, 5))", ""))
+            state = self.runner(IsolatedAdapter(self.home / "no-codex-login")).run()
+            self.assertEqual((state["phase"], state["reason"]), ("STOPPED", "Model usage missing; stop rather than lose batch accounting"))
+            self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
+            self.run_dir = self.home / "run-2"
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual((state["phase"], state["reason"]), ("STOPPED", "A Muse worker runs only through the isolated adapter"))
+
     def test_advisory_review_must_be_boolean(self):
         self.packet["advisory_review"] = "yes"
         with self.assertRaises(RunnerError):

@@ -700,6 +700,11 @@ def is_claude(model):
     return model.startswith("claude-")
 
 
+def is_muse(model):
+    """Meta's Muse models run through their own CLI, and only in the isolated adapter."""
+    return model.startswith("muse-")
+
+
 def record_prompt(runner, number, role, prompt, **extra):
     """Keep the exact prompt privately so a review or patch call can be replayed."""
     (runner.run_dir / f"prompt-{number}.txt").write_text(prompt)
@@ -722,6 +727,8 @@ def role_model(packet, role):
     """backend:model:effort that serves a role, as both adapters dispatch it."""
     model, effort = REVIEW_MODEL if role == "reviewer" else codex_model(packet, role)
     backend = "claude" if role == "reviewer" or (role == "worker" and is_claude(model)) else "codex"
+    if role == "worker" and is_muse(model):
+        backend = "muse"
     return backend + ":" + model + ":" + effort
 
 
@@ -751,6 +758,8 @@ class CodexAdapter:
         record_prompt(runner, number, role, prompt)
         if role == "worker" and is_claude(runner.packet["worker_model"]):
             return claude_worker(runner, number, prompt, runner.root)
+        if role == "worker" and is_muse(runner.packet["worker_model"]):
+            raise RunnerError("A Muse worker runs only through the isolated adapter")
         if role == "reviewer":
             return claude_call(runner, number, prompt, runner.root, role=role, model=REVIEW_MODEL[0],
                                effort=REVIEW_MODEL[1], schema=REVIEW_SCHEMA)
