@@ -121,11 +121,17 @@ def fingerprint(root):
     return h.hexdigest()
 
 
-def validate_packet(packet):
+LIMITS = {"max_corrections": (2, 0, 2), "max_calls": (6, 1, 7),
+          "call_timeout": (2700, 1, 2700), "total_timeout": (28800, 1, 28800)}
+
+
+def validate_packet(packet, ceilings=None):
+    """Check the packet's contract. Limits default to and are capped at LIMITS; only the caller's
+    `ceilings` (never the packet) can raise a cap."""
     required = {"id", "checkout", "base_sha", "branch", "objective", "acceptance",
                 "owned_files", "checks", "worker_model", "worker_reasoning", "plan"}
     optional = {"max_corrections", "max_calls", "call_timeout", "total_timeout", "luna_triage", "advisory_review",
-                "hidden_overlay"}
+                "hidden_overlay", "reviewer_model", "reviewer_reasoning"}
     if not isinstance(packet, dict) or not required <= packet.keys() or packet.keys() - required - optional:
         raise RunnerError("Packet fields do not match the documented contract")
     for key in required - {"owned_files", "checks", "acceptance"}:
@@ -167,9 +173,17 @@ def validate_packet(packet):
     if "hidden_overlay" in packet and not (isinstance(packet["hidden_overlay"], str)
                                            and Path(packet["hidden_overlay"]).is_absolute()):
         raise RunnerError("hidden_overlay must be an absolute directory path")
-    limits = {"max_corrections": (2, 0, 2), "max_calls": (6, 1, 7),
-              "call_timeout": (2700, 1, 2700), "total_timeout": (28800, 1, 28800)}
-    for key, (default, low, high) in limits.items():
+    for key in ("reviewer_model", "reviewer_reasoning"):
+        # Absent means today's pinned reviewer; nothing is filled in, so older packets keep their hash.
+        if key in packet and (not isinstance(packet[key], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,79}", packet[key])):
+            raise RunnerError("Invalid " + key)
+    if packet.get("reviewer_model", "").startswith("muse-"):
+        raise RunnerError("A reviewer runs as a Claude or Codex model, or meta/<id> in Codex; not in Muse's own harness")
+    ceilings = ceilings or {}
+    if set(ceilings) - LIMITS.keys() or not all(type(value) is int for value in ceilings.values()):
+        raise RunnerError("Ceilings must be integers for the bounded limits only")
+    for key, (default, low, high) in LIMITS.items():
+        high = max(high, ceilings.get(key, high))
         value = packet.setdefault(key, default)
         if type(value) is not int or not low <= value <= high:
             raise RunnerError("Invalid bounded limit: " + key)
@@ -348,8 +362,8 @@ def candidate_diff(root, base):
 
 
 class Runner:
-    def __init__(self, packet, run_dir, adapter, *, decision=None, attempt_log=None):
-        self.packet = validate_packet(dict(packet))
+    def __init__(self, packet, run_dir, adapter, *, decision=None, attempt_log=None, ceilings=None):
+        self.packet = validate_packet(dict(packet), ceilings)
         self.root = Path(self.packet["checkout"]).resolve()
         self.run_dir = Path(run_dir).resolve()
         if self.root == self.run_dir or self.root in self.run_dir.parents or self.run_dir in self.root.parents:
@@ -730,6 +744,11 @@ REVIEW_MODEL = ("claude-opus-5-5", "high")
 ADVISORY_MODEL = ("gpt-5.6-sol", "high")
 
 
+def reviewer_model(packet):
+    """The primary reviewer's model and effort: the packet's own setting, else REVIEW_MODEL."""
+    return (packet.get("reviewer_model", REVIEW_MODEL[0]), packet.get("reviewer_reasoning", REVIEW_MODEL[1]))
+
+
 def claude_worker(runner, number, prompt, cwd):
     """Implementation call through Claude Code."""
     return claude_call(runner, number, prompt, cwd, role="worker", model=runner.packet["worker_model"],
@@ -786,13 +805,13 @@ ROLE_TEMPLATES = {}
 
 def codex_model(packet, role):
     return {"worker": (packet["worker_model"], packet["worker_reasoning"]), "advisory": ADVISORY_MODEL,
-            "coordinator": ("gpt-6-luna", "medium")}[role]
+            "reviewer": reviewer_model(packet), "coordinator": ("gpt-6-luna", "medium")}[role]
 
 
 def role_model(packet, role):
     """backend:model:effort that serves a role, as both adapters dispatch it."""
-    model, effort = REVIEW_MODEL if role == "reviewer" else codex_model(packet, role)
-    backend = "claude" if role == "reviewer" or (role == "worker" and is_claude(model)) else "codex"
+    model, effort = codex_model(packet, role)
+    backend = "claude" if is_claude(model) and role in ("worker", "reviewer") else "codex"
     if role == "worker" and is_muse(model):
         backend = "muse"
     return backend + ":" + model + ":" + effort
@@ -826,10 +845,12 @@ class CodexAdapter:
             return claude_worker(runner, number, prompt, runner.root)
         if role == "worker" and is_muse(runner.packet["worker_model"]):
             raise RunnerError("A Muse worker runs only through the isolated adapter")
-        if role == "reviewer":
-            return claude_call(runner, number, prompt, runner.root, role=role, model=REVIEW_MODEL[0],
-                               effort=REVIEW_MODEL[1], schema=REVIEW_SCHEMA)
         model, effort = codex_model(runner.packet, role)
+        if role == "reviewer" and is_claude(model):
+            return claude_call(runner, number, prompt, runner.root, role=role, model=model,
+                               effort=effort, schema=REVIEW_SCHEMA)
+        if model.startswith("meta/"):
+            raise RunnerError("A meta/ model runs only through the isolated adapter")
         argv = ["codex", "exec", "--json", "--sandbox", "read-only", "--cd", str(runner.root),
                 "--model", model, "-c", 'model_reasoning_effort="' + effort + '"',
                 "-c", 'approval_policy="never"', "--disable", "multi_agent",

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
-from .runner import (REVIEW_MODEL, REVIEW_SCHEMA, ROLE_SCHEMAS, ROLE_TEMPLATES, RunnerError, canonical,
+from .runner import (REVIEW_SCHEMA, ROLE_SCHEMAS, ROLE_TEMPLATES, RunnerError, canonical,
                      claude_call, claude_worker, codex_model, git, is_claude, is_muse, record_prompt, save_json,
                      shown_packet)
 
@@ -231,11 +231,11 @@ class IsolatedAdapter:
             return claude_worker(runner, number, prompt, source)
         if role == "worker" and is_muse(packet["worker_model"]):
             return muse_worker(runner, number, prompt, source, ROLE_SCHEMAS[role])
-        if role == "reviewer":
-            return claude_call(runner, number, prompt, source, role=role, model=REVIEW_MODEL[0],
-                               effort=REVIEW_MODEL[1], schema=REVIEW_SCHEMA)
-        home = runtime_home(runner.run_dir / f"codex-{number}", source, self.auth_home)
         model, effort = codex_model(packet, role)
+        if role == "reviewer" and is_claude(model):
+            return claude_call(runner, number, prompt, source, role=role, model=model,
+                               effort=effort, schema=REVIEW_SCHEMA)
+        home = runtime_home(runner.run_dir / f"codex-{number}", source, self.auth_home)
         meta = model.startswith(META_PREFIX)
         if meta:
             meta_provider(home)

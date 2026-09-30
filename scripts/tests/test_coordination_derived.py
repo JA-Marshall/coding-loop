@@ -223,7 +223,7 @@ class DerivedTests(unittest.TestCase):
             self.assertEqual(code, 0, text)
             again, refused = self.call(*argv, "--live")
         self.assertEqual((again, "attempt exists" in refused), (2, True))
-        attempt = self.directory / "attempts" / "gpt-5-6-terra-medium"
+        attempt = self.directory / "attempts" / "gpt-5-6-terra-medium--claude-opus-5-5-high"
         packet = json.loads((attempt / "packet.json").read_text())
         self.assertEqual((packet["advisory_review"], packet["luna_triage"], packet["plan"]), (False, False, derived.PLAN))
         self.assertEqual(packet["checks"][0]["argv"][0], sys.executable)
@@ -235,6 +235,42 @@ class DerivedTests(unittest.TestCase):
         # The candidate is in the attempt's checkout; the validation checkout is untouched.
         self.assertEqual((attempt / "checkout" / "product.py").read_text(), FIXED)
         self.assertEqual((self.directory / "checkout" / "product.py").read_text(), PRODUCT)
+
+    def test_two_reviewers_on_one_packet_get_their_own_attempts_and_the_launcher_raises_a_limit(self):
+        self.prepared()
+        self.assertEqual(self.call("validate", "--directory", str(self.directory), "--python", sys.executable)[0], 0)
+        argv = ["run", "--directory", str(self.directory), "--worker-model", "gpt-5.6-terra", "--worker-reasoning", "medium",
+                "--auth-home", str(self.home), "--live"]
+        with patch.object(derived, "IsolatedAdapter", lambda auth_home: Worker()):
+            self.assertEqual(self.call(*argv)[0], 0)
+            code, text = self.call(*argv, "--reviewer-model", "meta/muse-spark-1.3-contributor", "--reviewer-reasoning", "medium",
+                                   "--total-timeout", "30000", "--max-corrections", "1")
+            self.assertEqual(code, 0, text)
+            self.assertEqual(self.call(*argv)[0], 2)  # the first pair's attempt still exists
+        default = json.loads((self.directory / "attempts" / "gpt-5-6-terra-medium--claude-opus-5-5-high" / "packet.json").read_text())
+        muse = self.directory / "attempts" / "gpt-5-6-terra-medium--meta-muse-spark-1-3-contributor-medium"
+        packet = json.loads((muse / "packet.json").read_text())
+        # A packet made without the flags records no reviewer and keeps the default limits.
+        self.assertEqual(({"reviewer_model", "reviewer_reasoning"} & default.keys(), default["total_timeout"]), (set(), 7200))
+        self.assertEqual((packet["reviewer_model"], packet["reviewer_reasoning"], packet["total_timeout"], packet["max_corrections"]),
+                         ("meta/muse-spark-1.3-contributor", "medium", 30000, 1))
+        state = json.loads((muse / "run" / "state.json").read_text())
+        self.assertEqual(state["pair"], {"worker": "codex:gpt-5.6-terra:medium",
+                                         "reviewer": "codex:meta/muse-spark-1.3-contributor:medium"})
+        self.assertFalse(packet["advisory_review"] or packet["luna_triage"])
+
+    def test_black_data_cases_are_run_through_its_format_test(self):
+        black = {"repo": "https://github.com/psf/black"}
+        one = ["python", "-m", "pytest", "-q", "tests/data/cases/fmtskip10.py"]
+        two = one[:4] + ["tests/data/cases/a_1.py", "tests/data/line_ranges_formatted/b.py"]
+        self.assertEqual(derived.runnable_argv(black, one), one[:4] + ["tests/test_format.py", "-k", "fmtskip10"])
+        self.assertEqual(derived.runnable_argv(black, two), two[:4] + ["tests/test_format.py", "-k", "a_1 or b"])
+        # Ordinary test files, mixed targets and other repositories are left alone.
+        mixed = one + ["tests/test_black.py"]
+        self.assertEqual(derived.runnable_argv(black, mixed), mixed)
+        self.assertEqual(derived.runnable_argv(black, ["python", "-m", "pytest", "-q", "tests/test_black.py"]),
+                         ["python", "-m", "pytest", "-q", "tests/test_black.py"])
+        self.assertEqual(derived.runnable_argv({"repo": "https://github.com/pallets/click"}, one), one)
 
     def test_symbolic_links_tracked_at_base_are_left_out_so_the_loop_accepts_the_checkout(self):
         # Rebuild the public repository with two tracked links at its base commit: one to a file, one to a directory.
@@ -265,7 +301,7 @@ class DerivedTests(unittest.TestCase):
             code, text = self.call("run", "--directory", str(self.directory), "--worker-model", "gpt-5.6-terra",
                                    "--worker-reasoning", "medium", "--auth-home", str(self.home), "--live")
         self.assertEqual(code, 0, text)
-        attempt = self.directory / "attempts" / "gpt-5-6-terra-medium" / "checkout"
+        attempt = self.directory / "attempts" / "gpt-5-6-terra-medium--claude-opus-5-5-high" / "checkout"
         self.assertEqual(((attempt / "product.py").read_text(), os.path.lexists(attempt / "ALIAS.py")), (FIXED, False))
         # A link the worker adds is still refused.
         os.symlink("product.py", attempt / "added.py")

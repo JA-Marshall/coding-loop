@@ -35,9 +35,10 @@ import subprocess
 import sys
 
 from .isolated import IsolatedAdapter
-from .runner import Runner, RunnerError, git, hidden_overlay, save_json, validate_packet
+from .runner import REVIEW_MODEL, Runner, RunnerError, git, hidden_overlay, save_json, validate_packet
 
 PLAN = "derived-from-merged-pull-request"
+DEFAULT_LIMITS = {"max_calls": 6, "max_corrections": 2, "call_timeout": 1800, "total_timeout": 7200}
 LOOP_FIELDS = ("id", "base_sha", "branch", "objective", "acceptance", "owned_files", "checks")
 
 
@@ -109,10 +110,29 @@ def prepare(args):
     return 0
 
 
+BLACK_CASE = re.compile(r"tests/data/[a-z_]+/([A-Za-z0-9_]+)\.py")
+
+
+def runnable_argv(packet, argv):
+    """The command that actually runs a packet's test targets.
+
+    Black keeps its formatting tests as data files under tests/data/, which are not tests themselves:
+    pytest collects nothing from them, or fails importing them. tests/test_format.py runs each one, so
+    a command whose targets are all such files is pointed there, selected by case name.
+    """
+    targets = argv[4:] if argv[:4] == ["python", "-m", "pytest", "-q"] else []
+    repo = packet.get("repo")
+    if (isinstance(repo, str) and repo.rstrip("/").endswith("/black") and targets
+            and all(BLACK_CASE.fullmatch(target) for target in targets)):
+        return argv[:4] + ["tests/test_format.py", "-k", " or ".join(BLACK_CASE.fullmatch(t).group(1) for t in targets)]
+    return argv
+
+
 def bound_checks(packet, python):
     """The packet's checks with a leading "python" replaced by the interpreter that holds the test dependencies."""
     return [dict(check, argv=[python if index == 0 and value in ("python", "python3") else value
-                              for index, value in enumerate(check["argv"])]) for check in packet["checks"]]
+                              for index, value in enumerate(runnable_argv(packet, check["argv"]))])
+            for check in packet["checks"]]
 
 
 def run_checks(root, checks, hidden, owned, log_prefix):
@@ -169,23 +189,31 @@ def run(args):
     packet, validation = record["packet"], load(directory / "validation.json")
     if validation.get("valid") is not True:
         raise RunnerError("The packet did not validate; an attempt could not be judged")
-    name = args.name or f"{args.worker_model}-{args.worker_reasoning}".replace(".", "-").replace("/", "-")
+    reviewer = (args.reviewer_model or REVIEW_MODEL[0], args.reviewer_reasoning or REVIEW_MODEL[1])
+    # Both roles are in the name, so two pairs on one packet cannot collide.
+    name = args.name or f"{args.worker_model}-{args.worker_reasoning}--{reviewer[0]}-{reviewer[1]}".replace(".", "-").replace("/", "-")
     attempt = directory / "attempts" / name
     if attempt.exists():
         raise RunnerError("That attempt exists; choose another --name")
     attempt.mkdir(mode=0o700, parents=True)
     clone_at_base(Path(record["source"]), attempt / "checkout", packet)
+    limits = {"max_calls": args.max_calls, "max_corrections": args.max_corrections,
+              "call_timeout": args.call_timeout, "total_timeout": args.total_timeout}
+    # The launcher, not the packet, decides how far a limit may be raised: the flag is its own ceiling.
+    ceilings = {key: value for key, value in limits.items() if value != DEFAULT_LIMITS[key]}
     loop_packet = validate_packet(dict(
         {key: packet[key] for key in LOOP_FIELDS}, checkout=str(attempt / "checkout"),
         checks=bound_checks(packet, validation["python"]), hidden_overlay=str(directory / "hidden"),
         worker_model=args.worker_model, worker_reasoning=args.worker_reasoning, plan=PLAN,
         # One worker and the primary reviewer: no triage call and no second, advisory review.
-        luna_triage=False, advisory_review=False,
-        max_calls=6, max_corrections=2, call_timeout=1800, total_timeout=7200))
+        luna_triage=False, advisory_review=False, **limits,
+        # Only the reviewer the launcher names is recorded; otherwise the loop's pinned one runs, as before.
+        **{key: value for key, value in (("reviewer_model", args.reviewer_model),
+                                         ("reviewer_reasoning", args.reviewer_reasoning)) if value}), ceilings)
     save_json(attempt / "packet.json", loop_packet)
     decision = json.loads(args.decision_file.read_text()) if args.decision_file else None
     result = Runner(loop_packet, attempt / "run", IsolatedAdapter(args.auth_home), decision=decision,
-                    attempt_log=args.attempt_log).run()
+                    attempt_log=args.attempt_log, ceilings=ceilings).run()
     print(json.dumps({"phase": result["phase"], "calls": result["calls"], "corrections": result["corrections"],
                       "reason": result.get("reason"), "report": str(attempt / "run" / "report.md")}, indent=2))
     return 0 if result["phase"] == "LOCAL_REVIEWED" else 1
@@ -208,7 +236,13 @@ def main(argv=None):
     command.add_argument("--worker-model", required=True)
     command.add_argument("--worker-reasoning", required=True)
     command.add_argument("--auth-home", type=Path, required=True, help="Codex home whose file login isolated calls copy")
-    command.add_argument("--name", help="attempt name (default: the worker model and effort)")
+    command.add_argument("--reviewer-model", help="primary reviewer model, e.g. claude-opus-5-5 or meta/<id> in Codex (default: the loop's pinned reviewer)")
+    command.add_argument("--reviewer-reasoning", help="the reviewer's effort (default: the loop's pinned effort)")
+    for flag, key in (("max-calls", "max_calls"), ("max-corrections", "max_corrections"),
+                      ("call-timeout", "call_timeout"), ("total-timeout", "total_timeout")):
+        command.add_argument("--" + flag, type=int, default=DEFAULT_LIMITS[key],
+                             help=f"limit (default {DEFAULT_LIMITS[key]}); a value above the loop's ceiling raises it for this launch only")
+    command.add_argument("--name", help="attempt name (default: worker model and effort, then reviewer model and effort)")
     command.add_argument("--live", action="store_true", help="explicitly authorize real model calls")
     command.add_argument("--attempt-log", type=Path, help="JSON-lines file the finished attempt is appended to (default: attempts.jsonl beside the run directory)")
     command.add_argument("--decision-file", type=Path, help="JSON object recording the routing decision; stored untouched, never acted on")

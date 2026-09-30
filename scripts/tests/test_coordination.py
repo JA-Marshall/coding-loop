@@ -13,7 +13,7 @@ import unittest
 from scripts.coordination.hooks import respond
 from scripts.coordination.runner import (
     CodexAdapter, Runner, RunnerError, apply_patch, authorize_live, checkout_lock,
-    fingerprint, git, main, save_json, validate_packet,
+    fingerprint, git, main, reviewer_model, save_json, validate_packet,
 )
 
 
@@ -719,6 +719,105 @@ print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 100, 'outp
         left = (self.run_dir / "codex-1" / "config.toml").read_text()
         self.assertNotIn("fixture-key", left)
         self.assertIn('model_provider = "meta"', left)
+
+    def fake_reviewer_codex(self, review_model):
+        """A codex stub for a reviewer run as meta/<id> in Codex's harness: it patches for the worker and reviews for the reviewer."""
+        context = self.fake_claude_cli(self.CLAUDE_PATCH, claude_worker=False)
+        (self.home / "bin" / "codex").write_text("#!" + sys.executable + "\n" + r"""import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+assert '--strict-config' in args and '--ephemeral' in args
+home = Path(os.environ['CODEX_HOME'])
+config = (home / 'config.toml').read_text()
+prompt = sys.stdin.read()
+packet = json.loads(prompt.split('PACKET:\n', 1)[1].split('\n', 1)[0])
+schema = json.loads(Path(args[args.index('--output-schema') + 1]).read_text())
+model = args[args.index('--model') + 1]
+if 'patch' in schema['properties']:
+    assert model == packet['worker_model'] and 'model_provider = "meta"' not in config, 'only the reviewer goes to Meta'
+    result = {'patch': PATCH_VALUE, 'summary': 'fake worker patch'}
+else:
+    assert model == 'REVIEW_MODEL', 'the provider prefix is not a model name: ' + model
+    assert config.startswith('model_provider = "meta"\n') and 'experimental_bearer_token = "fixture-key"' in config
+    assert 'model_reasoning_effort="medium"' in args
+    assert not (home / 'auth.json').exists(), 'the ChatGPT login is not sent along'
+    evidence = json.loads(prompt.split('\nEVIDENCE:\n', 1)[1])
+    result = {'candidate': evidence['candidate'], 'covered_files': evidence['files'],
+              'acceptance': packet['acceptance'], 'findings': []}
+Path(args[args.index('-o') + 1]).write_text(json.dumps(result))
+print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 100, 'output_tokens': 30}}))
+""".replace("PATCH_VALUE", repr(PATCH)).replace("REVIEW_MODEL", review_model))
+        login = self.home / "xdg" / "muse"
+        login.mkdir(parents=True)
+        (login / "auth.json").write_text(json.dumps({"providers": {"meta": {"api_key": "fixture-key"}}}))
+        auth = self.home / "codex-auth"
+        auth.mkdir()
+        (auth / "auth.json").write_text("{}")
+        return auth, patch.dict(os.environ, dict(context.values, XDG_CONFIG_HOME=str(self.home / "xdg")))
+
+    def test_a_meta_reviewer_runs_in_codex_and_the_pair_shows_the_reviewer_that_ran(self):
+        from scripts.coordination.isolated import IsolatedAdapter
+        auth, environment = self.fake_reviewer_codex("muse-spark-1.3-contributor")
+        self.packet.update(reviewer_model="meta/muse-spark-1.3-contributor", reviewer_reasoning="medium")
+        with environment:
+            state = self.runner(IsolatedAdapter(auth)).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(state["pair"], {"worker": "codex:gpt-5.6-terra:medium",
+                                         "reviewer": "codex:meta/muse-spark-1.3-contributor:medium"})
+        self.assertEqual([u["role"] for u in state["usage"]], ["worker", "reviewer"])
+        # The reviewer's own runtime home, and the key does not outlive its call.
+        left = (self.run_dir / "codex-2" / "config.toml").read_text()
+        self.assertIn('model_provider = "meta"', left)
+        self.assertNotIn("fixture-key", left)
+        self.assertNotIn("meta", (self.run_dir / "codex-1" / "config.toml").read_text())
+
+    def test_a_meta_reviewer_stops_outside_the_isolated_adapter(self):
+        self.packet.update(reviewer_model="meta/muse-spark-1.3-contributor", reviewer_reasoning="medium")
+        with self.fake_claude_cli(self.CLAUDE_PATCH):
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual((state["phase"], state["reason"]), ("STOPPED", "A meta/ model runs only through the isolated adapter"))
+
+    def test_a_claude_reviewer_of_another_model_is_called_with_that_model_and_effort(self):
+        context = self.fake_claude_cli(self.CLAUDE_PATCH, claude_worker=False)
+        claude = self.home / "bin" / "claude"
+        claude.write_text(claude.read_text().replace("== 'claude-opus-5-5'", "== 'claude-sonnet-5-5'")
+                          .replace("== 'high'", "== 'low'"))
+        self.packet.update(reviewer_model="claude-sonnet-5-5", reviewer_reasoning="low")
+        with context:
+            state = self.runner(CodexAdapter()).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(state["pair"]["reviewer"], "claude:claude-sonnet-5-5:low")
+
+    def test_reviewer_fields_are_optional_and_leave_an_older_packet_as_it_was(self):
+        before = dict(self.packet)
+        self.assertEqual({"reviewer_model", "reviewer_reasoning"} & validate_packet(dict(self.packet)).keys(), set())
+        self.assertEqual(reviewer_model(self.packet), ("claude-opus-5-5", "high"))
+        self.assertEqual(reviewer_model(dict(self.packet, reviewer_model="claude-sonnet-5-5")), ("claude-sonnet-5-5", "high"))
+        self.assertEqual(self.packet, before)
+        for change in ({"reviewer_model": ""}, {"reviewer_model": 5}, {"reviewer_reasoning": "hi gh"},
+                       {"reviewer_model": "muse-spark-1.3-contributor"}, {"reviewer_model": "../x"}):
+            with self.assertRaises(RunnerError, msg=change):
+                validate_packet(dict(self.packet, **change))
+
+    def test_a_packet_cannot_raise_a_limit_but_the_launcher_can(self):
+        raised = {"max_corrections": 3, "max_calls": 9, "call_timeout": 3000, "total_timeout": 30000}
+        for key, value in raised.items():
+            with self.assertRaises(RunnerError, msg=key):
+                validate_packet(dict(self.packet, **{key: value}))
+            with self.assertRaises(RunnerError, msg=key):
+                Runner(dict(self.packet, **{key: value}), self.run_dir, Adapter())
+            self.assertEqual(validate_packet(dict(self.packet, **{key: value}), {key: value})[key], value)
+            # A ceiling raises the cap for that limit only.
+            other = next(name for name in raised if name != key)
+            with self.assertRaises(RunnerError, msg=other):
+                validate_packet(dict(self.packet, **{other: raised[other]}), {key: value})
+        self.assertEqual(Runner(dict(self.packet, max_calls=9), self.run_dir, Adapter(), ceilings={"max_calls": 9}).packet["max_calls"], 9)
+        for bad in ({"max_calls": "9"}, {"nonsense": 9}):
+            with self.assertRaises(RunnerError, msg=bad):
+                validate_packet(dict(self.packet), bad)
+        # Defaults are unchanged.
+        packet = validate_packet(dict(self.packet))
+        self.assertEqual([packet[k] for k in ("max_corrections", "max_calls", "call_timeout", "total_timeout")], [2, 6, 2700, 28800])
 
     def test_advisory_review_must_be_boolean(self):
         self.packet["advisory_review"] = "yes"

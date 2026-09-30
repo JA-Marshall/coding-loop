@@ -263,7 +263,8 @@ def model_for(role, packet):
     if role == "worker" and packet:
         return {"model": packet.get("worker_model"), "reasoning": packet.get("worker_reasoning")}
     if role == "reviewer":
-        return {"model": REVIEW_MODEL[0], "reasoning": REVIEW_MODEL[1]}
+        return {"model": (packet or {}).get("reviewer_model", REVIEW_MODEL[0]),
+                "reasoning": (packet or {}).get("reviewer_reasoning", REVIEW_MODEL[1])}
     if role == "advisory":
         return {"model": ADVISORY_MODEL[0], "reasoning": ADVISORY_MODEL[1]}
     return {"model": None, "reasoning": None}
