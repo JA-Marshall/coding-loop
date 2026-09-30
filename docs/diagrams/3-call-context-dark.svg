@@ -1,19 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 404" role="img" aria-label="The supervisor assembles a prompt from a role template, the packet, a manifest of owned file names and sizes, and bounded evidence, then starts a fresh restricted process with read-only tools over a source snapshot with agent config stripped out. The process returns a JSON result and nothing carries over to the next call.">
-<style>text{font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:11.5px;fill:#1F2126}.mono{font-family:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}.b{font-weight:600}.mu{fill:#5C5F67}.c{text-anchor:middle}.e{text-anchor:end}.s9{font-size:9.5px;letter-spacing:.05em}.s10{font-size:10.5px}.s11{font-size:11px}.s12{font-size:12.5px}.s13{font-size:13px}.s15{font-size:15px}.ca{fill:#7E4706}.cg{fill:#24507F}.cs{fill:#96291F}.cr{fill:#4E3590}</style>
-<defs><marker id="head-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#1F2126"/></marker><marker id="head-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#B5433A"/></marker><marker id="head-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#6D4FB0"/></marker></defs>
-<rect width="960" height="404" rx="12" fill="#F3F0E8"/>
-<rect x="24" y="56" width="270" height="232" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="38" y="90" width="242" height="42" rx="4" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="38" y="138" width="242" height="42" rx="4" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="38" y="186" width="242" height="42" rx="4" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="38" y="234" width="242" height="42" rx="4" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M294 172H327" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="328" y="56" width="336" height="232" rx="6" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.75"/>
-<path d="M664 172H697" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="698" y="56" width="238" height="232" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M496 288V330H159V289" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="24" y="372" width="12" height="12" rx="3" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.25"/>
-<rect x="302.79999999999995" y="372" width="12" height="12" rx="3" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<style>text{font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:11.5px;fill:#E9E7E1}.mono{font-family:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}.b{font-weight:600}.mu{fill:#A4A7B0}.c{text-anchor:middle}.e{text-anchor:end}.s9{font-size:9.5px;letter-spacing:.05em}.s10{font-size:10.5px}.s11{font-size:11px}.s12{font-size:12.5px}.s13{font-size:13px}.s15{font-size:15px}.ca{fill:#F0BC74}.cg{fill:#9CC3EE}.cs{fill:#F0A29B}.cr{fill:#C6B4F2}</style>
+<defs><marker id="head-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#E9E7E1"/></marker><marker id="head-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#DD7168"/></marker><marker id="head-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#A48AE3"/></marker></defs>
+<rect width="960" height="404" rx="12" fill="#15171C"/>
+<rect x="24" y="56" width="270" height="232" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<rect x="38" y="90" width="242" height="42" rx="4" fill="#15171C" stroke="#474B57" stroke-width="1.25"/>
+<rect x="38" y="138" width="242" height="42" rx="4" fill="#15171C" stroke="#474B57" stroke-width="1.25"/>
+<rect x="38" y="186" width="242" height="42" rx="4" fill="#15171C" stroke="#474B57" stroke-width="1.25"/>
+<rect x="38" y="234" width="242" height="42" rx="4" fill="#15171C" stroke="#474B57" stroke-width="1.25"/>
+<path d="M294 172H327" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="328" y="56" width="336" height="232" rx="6" fill="#33260F" stroke="#D9983F" stroke-width="1.75"/>
+<path d="M664 172H697" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="698" y="56" width="238" height="232" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<path d="M496 288V330H159V289" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="24" y="372" width="12" height="12" rx="3" fill="#33260F" stroke="#D9983F" stroke-width="1.25"/>
+<rect x="302.79999999999995" y="372" width="12" height="12" rx="3" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
 <text x="24" y="34" class="b s15">One model call: what it can see</text>
 <text x="936" y="34" class="e mu mono s11">isolated.py</text>
 <text x="38" y="78" class="b s12">the supervisor builds the prompt</text>
