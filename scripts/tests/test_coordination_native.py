@@ -177,6 +177,10 @@ class NativeWorkerTests(unittest.TestCase):
         self.assertIn("codex:gpt-5.6-luna:high", spec["labels"]["coding-loop.lineup"])
         self.assertEqual(spec["user"], f"{os.getuid()}:{os.getgid()}")
         self.assertIn("--dangerously-bypass-approvals-and-sandbox", spec["argv"])
+        # The CLI's whole install directory is mounted, so Codex finds the helper binary beside it.
+        codex = Path(shutil.which("codex")).resolve()
+        self.assertIn((str(codex.parent), native.CLI_DIR, "ro"), spec["mounts"])
+        self.assertEqual(spec["argv"][0], native.CLI_DIR + "/" + codex.name)
         self.assertIn("/work", spec["stdin"].decode())
         self.assertEqual(spec["env"]["PATH"].split(":")[0], str(Path(self.python).parent))
         # The login copy does not outlive the call.
@@ -365,10 +369,10 @@ class ContainerTests(unittest.TestCase):
         name = "coding-loop-test-" + os.urandom(4).hex()
         self.addCleanup(subprocess.run, ["docker", "rm", "-f", name], capture_output=True)
         owner = self.work.stat()
-        return {"name": name, "log": "model-1", "stdin": b"prompt\n", "argv": [native.CLI], "timeout": timeout,
+        return {"name": name, "log": "model-1", "stdin": b"prompt\n", "argv": [native.CLI_DIR + "/cli"], "timeout": timeout,
                 "user": f"{owner.st_uid}:{owner.st_gid}", "labels": {"coding-loop.attempt": "test"},
                 "env": {"HOME": native.HOME}, "mounts": [(str(self.work), native.WORK, "rw"), (str(self.agent), native.HOME, "rw"),
-                                                         (str(cli), native.CLI, "ro")]}
+                                                         (str(self.home), native.CLI_DIR, "ro")]}
 
     def test_the_cli_edits_the_copy_as_the_owner_and_sees_nothing_else(self):
         spec = self.spec('cat > "$HOME/prompt"; echo new > sample.txt; id -u > uid; ls /home > "$HOME/root"; '

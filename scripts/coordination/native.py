@@ -11,6 +11,7 @@ applied.
 Only the model CLI runs in the container, as the user who owns the copy. It sees:
   /work         the copy, read-write
   /home/agent   a per-call home holding a copy of the CLI's login, deleted when the call ends
+  /opt/loop/bin the CLI's own install directory, read-only
   the packet's Python environment, read-only at its own paths, to run the visible tests
 and nothing else: never the hidden tests, the checkout (whose history holds the merged change),
 the run directory or the real logins. The container's only network is an internal one whose
@@ -42,7 +43,8 @@ IMAGE = "coding-loop-worker:1"
 IMAGE_DIR = Path(__file__).with_name("container")
 WORK = "/work"
 HOME = "/home/agent"
-CLI = "/opt/loop/cli"
+# The CLI's own install directory, read-only: Codex runs a helper binary that sits beside it.
+CLI_DIR = "/opt/loop/bin"
 NETWORK = "coding-loop-egress"
 PROXY_PORT = 3128
 # The model providers' API and login hosts; the proxy refuses every other destination.
@@ -423,15 +425,17 @@ def native_worker(runner, feedback, auth_home, python):
         executable = shutil.which("claude" if claude else "codex")
         if not executable:
             raise RunnerError(("Claude" if claude else "Codex") + " executable is not on PATH")
+        executable = Path(executable).resolve()
+        cli = f"{CLI_DIR}/{executable.name}"
         if claude:
             login = claude_home(home)
-            argv = [CLI, "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
+            argv = [cli, "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions",
                     "--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence",
                     "--disallowed-tools", "WebFetch,WebSearch", "--settings", canonical(CLAUDE_SETTINGS),
                     "--model", model, "--effort", effort]
         else:
             login = codex_home(home, model, auth_home)
-            argv = [CLI, "exec", "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox",
+            argv = [cli, "exec", "--json", "--strict-config", "--dangerously-bypass-approvals-and-sandbox",
                     "--cd", WORK, "--model", model[len(META_PREFIX):] if model.startswith(META_PREFIX) else model,
                     "-c", f'model_reasoning_effort="{effort}"', "-o", HOME + "/last-message.txt", "-"]
         before = file_digest(login)
@@ -449,7 +453,7 @@ def native_worker(runner, feedback, auth_home, python):
                     "NO_PROXY": "localhost,127.0.0.1", "PYTHONDONTWRITEBYTECODE": "1", "GIT_TERMINAL_PROMPT": "0",
                     "CODEX_HOME": HOME + "/.codex", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
                     "DISABLE_AUTOUPDATER": "1"},
-            "mounts": [(str(source), WORK, "rw"), (str(home), HOME, "rw"), (str(Path(executable).resolve()), CLI, "ro")]
+            "mounts": [(str(source), WORK, "rw"), (str(home), HOME, "rw"), (str(executable.parent), CLI_DIR, "ro")]
                       + [(s, t, "ro") for s, t in mounts],
         }
         ensure_egress()
