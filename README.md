@@ -127,8 +127,10 @@ A merged pull request with tests can be posed as a task: reproduce the product c
 ```sh
 python3 -m scripts.coordination.derived prepare packet.json --source /path/to/clone --directory /private/derived/some-pr
 python3 -m scripts.coordination.derived validate --directory /private/derived/some-pr --python /path/to/env/bin/python
-python3 -m scripts.coordination.derived run --directory /private/derived/some-pr --worker-model gpt-5.6-sol --worker-reasoning high --auth-home ~/.codex --live
+python3 -m scripts.coordination.derived run --directory /private/derived/some-pr --worker-model gpt-6.1-sol --worker-reasoning high --auth-home ~/.codex --live
 ```
+
+`gpt-6.1-sol` needs Codex CLI 0.159.1 or later; an older client is refused that model on a ChatGPT sign-in.
 
 - `prepare` clones at the base commit and saves the test files from the merge commit outside the checkout. The packet's `hidden_overlay` names that directory. The runner places those files over the checkout only while a check command runs and puts back what was there before the candidate is fingerprinted, reviewed or read by a model.
 - `validate` makes no model call. The checks must fail at the base commit and pass once the merged change to the owned files is applied; a packet that does neither cannot judge an attempt. `--python` is an interpreter that already holds the repository's test dependencies for that base commit, and it replaces a leading `python` in each check command.
