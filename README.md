@@ -10,25 +10,19 @@ watch both packet batches and the lighter phase runner from one page.
 
 It was built to run overnight against a private Django repo (a one-person inventory and eBay selling system) with GPT and Claude taking turns as worker and reviewer. The code here is lifted from that repo's `scripts/coordination/` unchanged, plus its tests, so you can read a real thing rather than a sketch.
 
-Amber in the diagrams is the only place model tokens are spent. Violet is the router, which learns from recorded outcomes and is still planned.
+Amber in the diagrams is the only place model tokens are spent.
 
 ## 1. Outer loop: one pass per packet (`batch.py`)
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/1-batch-loop-dark.svg">
-  <img alt="Batch loop" src="docs/diagrams/1-batch-loop.svg">
-</picture>
+![Batch loop](docs/diagrams/1-batch-loop.svg)
 
-Each packet is one trip round the loop: the top row runs on the local machine and the bottom row is plain HTTP against the GitHub API. `PREPARE` writes and validates the packet's plan file and `RUN` hands off to the inner loop, which runs the packet's checks before any reviewer sees the diff. `CI` is a second gate on the pushed head, not the first time the tests run. `ROUTE` is planned and not in `batch.py` yet; see figure 4. The next packet starts from a refreshed `origin/main` after the previous one has verifiably merged. A `state.json` checkpoint is written after every phase, so a restart reconciles local writes and remote PR state instead of starting a second writer.
+Each packet is a full trip along the top row. `PREPARE` writes and validates the packet's plan file, `RUN` hands off to the inner loop, and everything from `PUSH` onwards is plain HTTP against the GitHub API. The next packet starts from a refreshed `origin/main` after the previous one has verifiably merged. A `state.json` checkpoint is written after every phase, so a restart reconciles local writes and remote PR state instead of starting a second writer.
 
 Anything in red stops the queue in place with the evidence preserved: a `STOP` file, the wall-clock deadline, the call or token budget, failed or stale CI, a changes-requested review, a moved branch, or a change to the supervisor's own files while it is running.
 
 ## 2. Inner loop: one packet (`runner.py`)
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/2-packet-loop-dark.svg">
-  <img alt="Packet loop" src="docs/diagrams/2-packet-loop.svg">
-</picture>
+![Packet loop](docs/diagrams/2-packet-loop.svg)
 
 The worker model is asked for a unified diff and a summary, nothing else. The supervisor applies the patch to the packet's owned files only, runs the prescribed check commands, then sends the full diff to a reviewer model. Three things send work back to a fresh `IMPLEMENT` call, each with a bounded slice of evidence:
 
@@ -40,23 +34,9 @@ A corrected candidate is reviewed against the findings it was meant to fix, so t
 
 ## 3. What one model call can see
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/3-call-context-dark.svg">
-  <img alt="Call context" src="docs/diagrams/3-call-context.svg">
-</picture>
+![Call context](docs/diagrams/3-call-context.svg)
 
 Context is managed between calls, not inside them. The supervisor assembles the prompt from a role template, the packet, a manifest of owned file names and sizes, and bounded evidence. The process then runs with read-only tools over a source snapshot from which `.claude/`, `CLAUDE.md`, `.codex/`, `.agents/` and `.env*` have been stripped, so nothing in the repo can override the packet. It returns JSON matching a schema. The next call starts from zero.
-
-## 4. Routing loop: which pair, and whether to split (planned)
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/4-routing-loop-dark.svg">
-  <img alt="Routing loop" src="docs/diagrams/4-routing-loop.svg">
-</picture>
-
-The loop records how every attempt ends, which is enough to learn how big a task a cheap worker and reviewer can finish in one pass. A predictor estimates that probability from packet features that need no model call. A contextual bandit then picks one of three actions for each packet: the cheap pair as posed, the expensive pair as posed, or the cheap pair after a smarter model has split the packet into sub-packets with disjoint file ownership. A split only counts if the union of its merged parts passes the original packet's checks, so the decomposer cannot score by cutting work into pieces that do not add up.
-
-Only the recording side exists so far, and not all of it is on this branch: the run record exporter lives in the separate coding-loop-router repository, and the launcher for packets derived from merged pull requests is on the `derived-packets` branch. The predictor, the bandit and the decomposer are planned in that order.
 
 ## Budgets
 
@@ -99,7 +79,6 @@ scripts/coordination/
   hooks.py          optional Claude Code hook profile for the worker process
   worker.md, reviewer.md, advisory.md, coordinator.md   role prompts
   ebay_queue.json   the real four-packet queue this shipped with
-docs/diagrams/      the figures above; build.py draws them, light and dark
 scripts/tests/      197 tests, no live models
 scripts/validate_plans.py, PLANS.md, docs/plans/templates/
                     the plan lifecycle the batch loop drives (DRAFT → READY → IN_PROGRESS → COMPLETE)

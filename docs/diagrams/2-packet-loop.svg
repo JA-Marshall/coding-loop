@@ -1,83 +1,61 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 528" role="img" aria-label="Inside one packet the runner calls a worker model for a patch, applies it to the owned files only, runs the prescribed checks, then calls a reviewer model on the full diff. A bad patch, a failed check or a blocking finding sends bounded evidence back to a fresh worker call, at most two corrections and six calls. High-risk packets get an independent advisory review whose blocking finding stops the run for the owner. Otherwise the candidate is handed back as LOCAL_REVIEWED. Every attempt becomes a run record for the router.">
-<style>text{font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:11.5px;fill:#1F2126}.mono{font-family:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}.b{font-weight:600}.mu{fill:#5C5F67}.c{text-anchor:middle}.e{text-anchor:end}.s9{font-size:9.5px;letter-spacing:.05em}.s10{font-size:10.5px}.s11{font-size:11px}.s12{font-size:12.5px}.s13{font-size:13px}.s15{font-size:15px}.ca{fill:#7E4706}.cg{fill:#24507F}.cs{fill:#96291F}.cr{fill:#4E3590}</style>
-<defs><marker id="head-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#1F2126"/></marker><marker id="head-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#B5433A"/></marker><marker id="head-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#6D4FB0"/></marker></defs>
-<rect width="960" height="528" rx="12" fill="#F3F0E8"/>
-<rect x="24" y="104" width="132" height="50" rx="6" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.75"/>
-<rect x="180" y="104" width="132" height="50" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M156 129H179" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="336" y="104" width="132" height="50" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M312 129H335" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="492" y="104" width="132" height="50" rx="6" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.75"/>
-<path d="M468 129H491" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="648" y="104" width="132" height="50" rx="6" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.75" stroke-dasharray="5 4"/>
-<path d="M624 129H647" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="804" y="104" width="132" height="50" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M780 129H803" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<path d="M246 154V185" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="174" y="186" width="144" height="66" rx="6" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M246 252V272" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round"/>
-<path d="M402 154V185" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="330" y="186" width="144" height="66" rx="6" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M402 252V272" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round"/>
-<path d="M558 154V185" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="486" y="186" width="144" height="66" rx="6" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M558 252V272" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round"/>
-<path d="M558 272H90V155" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<path d="M50 154V331" fill="none" stroke="#B5433A" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-s)"/>
-<rect x="24" y="332" width="440" height="72" rx="6" fill="#F8E1DD" stroke="#B5433A" stroke-width="1.75"/>
-<path d="M714 154V331" fill="none" stroke="#B5433A" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-s)"/>
-<rect x="496" y="332" width="440" height="72" rx="6" fill="#F8E1DD" stroke="#B5433A" stroke-width="1.75"/>
-<rect x="24" y="426" width="912" height="56" rx="6" fill="#ECE6F7" stroke="#6D4FB0" stroke-width="1.75"/>
-<rect x="24" y="496" width="12" height="12" rx="3" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.25"/>
-<rect x="302.79999999999995" y="496" width="12" height="12" rx="3" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="407.99999999999994" y="496" width="12" height="12" rx="3" fill="#F8E1DD" stroke="#B5433A" stroke-width="1.25"/>
-<rect x="468.3999999999999" y="496" width="12" height="12" rx="3" fill="#ECE6F7" stroke="#6D4FB0" stroke-width="1.25"/>
-<text x="24" y="34" class="b s15">Inner loop: one packet</text>
-<text x="936" y="34" class="e mu mono s11">runner.py</text>
-<text x="90.0" y="134" class="mono b s12 c ca">IMPLEMENT</text>
-<text x="90.0" y="76" class="mu s11 c">worker model,</text>
-<text x="90.0" y="91" class="mu s11 c">fresh process</text>
-<text x="246.0" y="134" class="mono b s12 c">APPLYING</text>
-<text x="246.0" y="76" class="mu s11 c">patch applied to</text>
-<text x="246.0" y="91" class="mu s11 c">the owned files only</text>
-<text x="402.0" y="134" class="mono b s12 c">CHECKS</text>
-<text x="402.0" y="76" class="mu s11 c">prescribed commands:</text>
-<text x="402.0" y="91" class="mu s11 c">tests, validator</text>
-<text x="558.0" y="134" class="mono b s12 c ca">REVIEW</text>
-<text x="558.0" y="76" class="mu s11 c">Claude Opus 5.5, full</text>
-<text x="558.0" y="91" class="mu s11 c">diff and prior findings</text>
-<text x="714.0" y="134" class="mono b s12 c ca">ADVISORY</text>
-<text x="714.0" y="76" class="mu s11 c">GPT Sol, high-risk only,</text>
-<text x="714.0" y="91" class="mu s11 c">sees no prior findings</text>
-<text x="870.0" y="134" class="mono b s12 c">LOCAL_REVIEWED</text>
-<text x="870.0" y="76" class="mu s11 c">handed back to</text>
-<text x="870.0" y="91" class="mu s11 c">the batch loop</text>
-<text x="246" y="206" class="b c">bad patch</text>
-<text x="246" y="223" class="mu s11 c">back with the</text>
-<text x="246" y="237" class="mu s11 c">parser error</text>
-<text x="402" y="206" class="b c">failed check</text>
-<text x="402" y="223" class="mu s11 c">back with ≤8,000 chars</text>
-<text x="402" y="237" class="mu s11 c">of its failure blocks</text>
-<text x="558" y="206" class="b c">blocking finding</text>
-<text x="558" y="223" class="mu s11 c">back with the</text>
-<text x="558" y="237" class="mu s11 c">findings themselves</text>
-<text x="104" y="293" class="s12">back to a fresh IMPLEMENT call with only that evidence: one correction, at most 2</text>
-<text x="104" y="309" class="mu">each return is a new process, not a resumed session</text>
-<text x="38" y="354" class="b s12 cs">STOPPED</text>
-<text x="38" y="374" class="cs">more than 2 corrections · more than 6 calls (7 with advisory)</text>
-<text x="38" y="389" class="cs">empty patch · out-of-scope file</text>
-<text x="724" y="262" class="mu s11">a blocking advisory finding</text>
-<text x="724" y="276" class="mu s11">never starts a correction</text>
-<text x="510" y="354" class="b s12 cs">STOPPED for owner review</text>
-<text x="510" y="374" class="cs">the advisory review raised a blocking finding; the reviewed</text>
-<text x="510" y="389" class="cs">candidate is kept and no PR is opened</text>
-<text x="870" y="176" class="mu s11 c">non-blocking findings</text>
-<text x="870" y="190" class="mu s11 c">travel in the PR body</text>
-<text x="870" y="204" class="mu s11 c">as reviewer notes</text>
-<text x="38" y="448" class="b s12 cr">Every attempt, however it ends, becomes a run record for the router · figure 4</text>
-<text x="38" y="467" class="mu">label (one_pass, corrected, blocked, failed_checks, no_patch) · correction rounds · tokens per role · seconds</text>
-<text x="42" y="506" class="mu s11">model call: the only place tokens are spent</text>
-<text x="320.79999999999995" y="506" class="mu s11">plain Python</text>
-<text x="425.99999999999994" y="506" class="mu s11">stop</text>
-<text x="486.3999999999999" y="506" class="mu s11">router: learned from outcomes, no model call of its own</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui, sans-serif" viewBox="0 0 960 380" role="img" aria-label="Inside one packet the runner calls a worker model for a patch, applies it to owned files only, runs the prescribed checks, then calls a reviewer model on the full diff; a bad patch, failed check, or blocking finding sends bounded evidence back to a fresh worker call, at most two corrections and six calls, after which the candidate is handed back as LOCAL_REVIEWED or the run stops.">
+    <defs>
+      <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1F2126"/></marker>
+      <marker id="a2s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B5433A"/></marker>
+    </defs><rect x="0" y="0" width="960" height="380" fill="#ECEAE3"/>
+    <g fill="none" stroke="#1F2126" stroke-width="1.5">
+      <rect x="20" y="50" width="130" height="48" rx="4" fill="#F7E7CF" stroke="#B86E14" stroke-width="2"/>
+      <rect x="180" y="50" width="130" height="48" rx="4" fill="#F5F3EE"/>
+      <rect x="340" y="50" width="130" height="48" rx="4" fill="#F5F3EE"/>
+      <rect x="500" y="50" width="130" height="48" rx="4" fill="#F7E7CF" stroke="#B86E14" stroke-width="2"/>
+      <rect x="660" y="50" width="130" height="48" rx="4" fill="#F7E7CF" stroke="#B86E14" stroke-width="2" stroke-dasharray="5 4"/>
+      <rect x="820" y="50" width="120" height="48" rx="4" fill="#F5F3EE"/>
+      <path d="M150 74H178" marker-end="url(#a2)"/>
+      <path d="M310 74H338" marker-end="url(#a2)"/>
+      <path d="M470 74H498" marker-end="url(#a2)"/>
+      <path d="M630 74H658" marker-end="url(#a2)"/>
+      <path d="M790 74H818" marker-end="url(#a2)"/>
+      <!-- corrections back to IMPLEMENT -->
+      <path d="M245 98V180H85V100" marker-end="url(#a2)"/>
+      <path d="M405 98V216H85" stroke-dasharray="0"/>
+      <path d="M565 98V252H85"/>
+      <!-- stop arrows -->
+      <path d="M725 98V300" stroke="#B5433A" marker-end="url(#a2s)"/>
+      <path d="M40 98V300" stroke="#B5433A" marker-end="url(#a2s)"/>
+      <rect x="20" y="302" width="300" height="52" rx="4" fill="#F6DEDB" stroke="#B5433A"/>
+      <rect x="600" y="302" width="340" height="52" rx="4" fill="#F6DEDB" stroke="#B5433A"/>
+    </g>
+    <g fill="#1F2126" font-size="12">
+      <g font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="500" text-anchor="middle">
+        <text x="85" y="78" fill="#B86E14">IMPLEMENT</text>
+        <text x="245" y="78">APPLYING</text>
+        <text x="405" y="78">CHECKS</text>
+        <text x="565" y="78" fill="#B86E14">REVIEW</text>
+        <text x="725" y="78" fill="#B86E14">ADVISORY</text>
+        <text x="880" y="78">LOCAL_REVIEWED</text>
+      </g>
+      <g fill="#6B6E76" font-size="10.5" text-anchor="middle">
+        <text x="85" y="36">worker model, fresh process</text>
+        <text x="245" y="36">apply patch to owned files only</text>
+        <text x="405" y="36">prescribed argv: tests, validator</text>
+        <text x="565" y="36">Claude Opus 5.5, full diff</text>
+        <text x="725" y="36">GPT Sol, high-risk packets only</text>
+        <text x="880" y="36">hand back to batch</text>
+      </g>
+      <text x="245" y="118" text-anchor="middle" font-size="10.5" fill="#6B6E76">returns {patch, summary}</text>
+      <text x="565" y="118" text-anchor="middle" font-size="10.5" fill="#6B6E76">sees prior blocking findings</text>
+      <text x="725" y="118" text-anchor="middle" font-size="10.5" fill="#6B6E76">independent, no prior findings</text>
+      <g font-size="11">
+        <text x="255" y="176">bad patch format → back with the parser error</text>
+        <text x="415" y="212">failed checks → back with ≤8,000 chars of the failure blocks</text>
+        <text x="575" y="248">blocking findings → back with the findings, correction + 1</text>
+      </g>
+      <text x="95" y="290" fill="#6B6E76" font-size="10.5">each return is a new fresh process, not a resumed session</text>
+      <g fill="#B5433A">
+        <text x="32" y="322" font-weight="500">STOPPED</text>
+        <text x="32" y="338" font-size="10.5">corrections &gt; 2 · calls &gt; 6 (7 with advisory) · empty patch · out-of-scope file</text>
+        <text x="612" y="322" font-weight="500">STOPPED for owner review</text>
+        <text x="612" y="338" font-size="10.5">advisory raised a blocking finding; reviewed candidate kept, no PR opened</text>
+      </g>
+    </g>
+  </svg>

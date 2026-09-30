@@ -1,57 +1,59 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 404" role="img" aria-label="The supervisor assembles a prompt from a role template, the packet, a manifest of owned file names and sizes, and bounded evidence, then starts a fresh restricted process with read-only tools over a source snapshot with agent config stripped out. The process returns a JSON result and nothing carries over to the next call.">
-<style>text{font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:11.5px;fill:#1F2126}.mono{font-family:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}.b{font-weight:600}.mu{fill:#5C5F67}.c{text-anchor:middle}.e{text-anchor:end}.s9{font-size:9.5px;letter-spacing:.05em}.s10{font-size:10.5px}.s11{font-size:11px}.s12{font-size:12.5px}.s13{font-size:13px}.s15{font-size:15px}.ca{fill:#7E4706}.cg{fill:#24507F}.cs{fill:#96291F}.cr{fill:#4E3590}</style>
-<defs><marker id="head-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#1F2126"/></marker><marker id="head-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#B5433A"/></marker><marker id="head-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#6D4FB0"/></marker></defs>
-<rect width="960" height="404" rx="12" fill="#F3F0E8"/>
-<rect x="24" y="56" width="270" height="232" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="38" y="90" width="242" height="42" rx="4" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="38" y="138" width="242" height="42" rx="4" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="38" y="186" width="242" height="42" rx="4" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<rect x="38" y="234" width="242" height="42" rx="4" fill="#F3F0E8" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M294 172H327" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="328" y="56" width="336" height="232" rx="6" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.75"/>
-<path d="M664 172H697" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="698" y="56" width="238" height="232" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<path d="M496 288V330H159V289" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
-<rect x="24" y="372" width="12" height="12" rx="3" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.25"/>
-<rect x="302.79999999999995" y="372" width="12" height="12" rx="3" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
-<text x="24" y="34" class="b s15">One model call: what it can see</text>
-<text x="936" y="34" class="e mu mono s11">isolated.py</text>
-<text x="38" y="78" class="b s12">the supervisor builds the prompt</text>
-<text x="48" y="107" class="mono b s11">TEMPLATE</text>
-<text x="48" y="123" class="mu">worker.md or reviewer.md</text>
-<text x="48" y="155" class="mono b s11">PACKET</text>
-<text x="48" y="171" class="mu">objective, owned files, budgets</text>
-<text x="48" y="203" class="mono b s11">MANIFEST</text>
-<text x="48" y="219" class="mu">file names and byte sizes only</text>
-<text x="48" y="251" class="mono b s11">EVIDENCE</text>
-<text x="48" y="267" class="mu">≤8,000 chars, or the diff</text>
-<text x="310" y="164" class="mu s10 c">stdin</text>
-<text x="342" y="78" class="b s12 ca">one fresh process, empty context</text>
-<text x="342" y="108" class="mono s11">claude -p --restricted --tools Read,Grep,Glob</text>
-<text x="342" y="128" class="mono s11">codex exec --sandbox read-only</text>
-<text x="342" y="148" class="mono s11">muse exec --no-session-log</text>
-<text x="342" y="192" class="mu">reads only the symbols it needs</text>
-<text x="342" y="212" class="mu">no write, shell, network or delegation</text>
-<text x="342" y="232" class="mu">no --resume, no prior turns, no compaction</text>
-<text x="342" y="252" class="mu">its output must match a JSON schema</text>
-<text x="681" y="164" class="mu s10 c">reads</text>
-<text x="712" y="78" class="b s12">read-only source snapshot</text>
-<text x="712" y="100" class="mu">tracked files are copied, with</text>
-<text x="712" y="115" class="mu">these stripped so nothing in the</text>
-<text x="712" y="130" class="mu">repo can override the packet:</text>
-<text x="712" y="158" class="mono s11">.claude/</text>
-<text x="794" y="158" class="mono s11">CLAUDE.md</text>
-<text x="712" y="176" class="mono s11">.codex/</text>
-<text x="794" y="176" class="mono s11">.agents/</text>
-<text x="712" y="194" class="mono s11">.git/</text>
-<text x="794" y="194" class="mono s11">.github/</text>
-<text x="712" y="212" class="mono s11">.env*</text>
-<text x="712" y="240" class="mu">check logs live outside it, so</text>
-<text x="712" y="255" class="mu">only the EVIDENCE excerpt</text>
-<text x="712" y="270" class="mu">of them is visible</text>
-<text x="510" y="310" class="mono s11">{patch, summary}  or  {findings[]}</text>
-<text x="510" y="326" class="mu">parsed, size-capped, usage recorded</text>
-<text x="24" y="358" class="s12">The next call starts from zero: only what the supervisor puts back into the prompt survives.</text>
-<text x="42" y="382" class="mu s11">model call: the only place tokens are spent</text>
-<text x="320.79999999999995" y="382" class="mu s11">plain Python</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui, sans-serif" viewBox="0 0 960 300" role="img" aria-label="The supervisor assembles a prompt from a role template, the packet, a manifest of owned file names and sizes, and bounded evidence, then starts a fresh restricted process with read-only tools over a source snapshot with agent config stripped out; the process returns a JSON result and nothing carries over to the next call.">
+    <defs>
+      <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1F2126"/></marker>
+    </defs><rect x="0" y="0" width="960" height="300" fill="#ECEAE3"/>
+    <g fill="none" stroke="#1F2126" stroke-width="1.5">
+      <!-- prompt parts -->
+      <rect x="20" y="20" width="250" height="180" rx="6" fill="#F5F3EE"/>
+      <rect x="36" y="56" width="218" height="28" rx="3" fill="#ECEAE3"/>
+      <rect x="36" y="92" width="218" height="28" rx="3" fill="#ECEAE3"/>
+      <rect x="36" y="128" width="218" height="28" rx="3" fill="#ECEAE3"/>
+      <rect x="36" y="164" width="218" height="28" rx="3" fill="#ECEAE3"/>
+      <!-- process -->
+      <rect x="340" y="20" width="280" height="180" rx="6" fill="#F7E7CF" stroke="#B86E14" stroke-width="2"/>
+      <!-- snapshot -->
+      <rect x="690" y="20" width="250" height="180" rx="6" fill="#F5F3EE"/>
+      <path d="M270 110H338" marker-end="url(#a3)"/>
+      <path d="M620 110H688" marker-end="url(#a3)"/>
+      <path d="M480 200V250" marker-end="url(#a3)"/>
+      <path d="M480 250H145V202" marker-end="url(#a3)"/>
+    </g>
+    <g fill="#1F2126" font-size="12">
+      <text x="32" y="42" font-weight="500">supervisor builds the prompt</text>
+      <g font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+        <text x="46" y="74">worker.md / reviewer.md template</text>
+        <text x="46" y="110">PACKET: objective, owned files, budgets</text>
+        <text x="46" y="146">MANIFEST: file names + byte sizes only</text>
+        <text x="46" y="182">EVIDENCE: ≤8,000 chars, or the diff</text>
+      </g>
+      <text x="304" y="102" text-anchor="middle" font-size="10.5" fill="#6B6E76">stdin</text>
+      <text x="352" y="42" font-weight="500" fill="#B86E14">one fresh process, empty context</text>
+      <g font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+        <text x="352" y="70">claude -p --restricted --tools Read,Grep,Glob</text>
+        <text x="352" y="88">codex exec --sandbox read-only</text>
+        <text x="352" y="106">muse exec --no-session-log</text>
+      </g>
+      <g font-size="10.5" fill="#6B6E76">
+        <text x="352" y="134">reads only the symbols it needs</text>
+        <text x="352" y="150">no write, shell, network or delegation</text>
+        <text x="352" y="166">no --resume, no prior turns, no compaction</text>
+        <text x="352" y="182">output must match a JSON schema</text>
+      </g>
+      <text x="654" y="102" text-anchor="middle" font-size="10.5" fill="#6B6E76">reads</text>
+      <text x="702" y="42" font-weight="500">read-only source snapshot</text>
+      <g font-size="10.5" fill="#6B6E76">
+        <text x="702" y="66">tracked files copied, .env excluded</text>
+        <text x="702" y="82">stripped so nothing can override the packet:</text>
+      </g>
+      <g font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">
+        <text x="702" y="104">.claude/  CLAUDE.md</text>
+        <text x="702" y="122">.codex/   .agents/</text>
+        <text x="702" y="140">.git/     .github/</text>
+      </g>
+      <text x="702" y="170" font-size="10.5" fill="#6B6E76">check logs live outside the snapshot,</text>
+      <text x="702" y="184" font-size="10.5" fill="#6B6E76">so only the excerpt in EVIDENCE is visible</text>
+      <text x="492" y="232" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11">{patch, summary}  or  {findings[]}</text>
+      <text x="492" y="246" font-size="10.5" fill="#6B6E76">parsed, size-capped, usage recorded</text>
+      <text x="300" y="272" text-anchor="middle" font-size="11">the next call starts from zero: only what the supervisor puts back in the prompt survives</text>
+    </g>
+  </svg>
