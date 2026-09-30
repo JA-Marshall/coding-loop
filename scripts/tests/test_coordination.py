@@ -179,7 +179,7 @@ class RunnerTests(unittest.TestCase):
             apply_patch(self.root, PATCH.replace("@@ -1 +1 @@", "@@ -1,9 +1,8 @@"), ["different.txt"])
         self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
 
-    def test_patch_context_correction_uses_existing_budget_without_triage(self):
+    def test_patch_context_correction_is_a_free_format_retry_without_triage(self):
         adapter = Adapter()
         def fix(runner, role, feedback):
             result = adapter(runner, role, feedback)
@@ -191,7 +191,7 @@ class RunnerTests(unittest.TestCase):
         state = self.runner(fix).run()
         self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
         self.assertEqual(state["calls"], 3)
-        self.assertEqual(state["corrections"], 1)
+        self.assertEqual((state["corrections"], state["format_retries"]), (0, 1))
         self.assertEqual(adapter.roles, ["worker", "worker", "reviewer"])
 
     def test_patch_feedback_quotes_git_and_names_foreign_headers(self):
@@ -217,7 +217,7 @@ class RunnerTests(unittest.TestCase):
             return result
         state = self.runner(worker).run()
         self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
-        self.assertEqual(state["corrections"], 2)
+        self.assertEqual((state["corrections"], state["format_retries"]), (0, 2))
 
     def test_the_same_broken_patch_twice_is_a_repeated_failure(self):
         state = self.runner(lambda *_: {"patch": "not a diff", "summary": "broken"}).run()
@@ -226,10 +226,16 @@ class RunnerTests(unittest.TestCase):
 
     def test_bad_patch_exhaustion_retains_counters(self):
         self.packet["max_corrections"] = 1
-        state = self.runner(lambda *_: {"patch": "not a diff", "summary": "broken"}).run()
+        calls = []
+        def broken(*_):
+            calls.append(1)
+            return {"patch": f"not a diff {len(calls)}", "summary": "broken"}
+        state = self.runner(broken).run()
         self.assertEqual(state["phase"], "STOPPED")
-        self.assertEqual(state["calls"], 2)
-        self.assertEqual(state["corrections"], 1)
+        self.assertEqual(state["reason"], "Correction budget exhausted")
+        self.assertEqual(state["calls"], 4)
+        self.assertEqual((state["corrections"], state["format_retries"]), (1, 2))
+        self.assertEqual([e.get("format_retry", False) for e in state["corrections_log"]], [True, True, False])
         self.assertEqual((self.root / "sample.txt").read_text(), "old\n")
 
     def test_patch_outside_scope_does_not_apply(self):
@@ -1103,7 +1109,7 @@ agent_strategy: SEQUENTIAL_WORKER
         state = self.runner(adapter).run()
         self.assertEqual([(e["round"], e["cause"], e["call"]) for e in state["corrections_log"]],
                          [(1, "patch_failed", 1), (2, "check_failed", 2)])
-        self.assertEqual(state["corrections"], len(state["corrections_log"]))
+        self.assertEqual(state["corrections"], sum(not e.get("format_retry") for e in state["corrections_log"]))
         self.assertTrue(all(isinstance(e["at"], float) for e in state["corrections_log"]))
         self.assertEqual(self.log_lines()[0]["corrections_log"], state["corrections_log"])
 

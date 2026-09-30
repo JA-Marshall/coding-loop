@@ -159,6 +159,9 @@ def fingerprint(root):
     return h.hexdigest()
 
 
+# Patches that git cannot apply get this many corrections outside max_corrections: models
+# trained on other patch formats need a round or two to adapt. max_calls still caps them.
+FORMAT_RETRIES = 2
 LIMITS = {"max_corrections": (2, 0, 2), "max_calls": (6, 1, 7),
           "call_timeout": (2700, 1, 2700), "total_timeout": (28800, 1, 28800)}
 
@@ -685,7 +688,8 @@ class Runner:
             raise RunnerError("Review is malformed, stale or missing full coverage")
 
     def correct(self, feedback, cause, *, triage=True, patch=None):
-        if self.state["corrections"] >= self.packet["max_corrections"]:
+        free = cause == "patch_failed" and self.state.get("format_retries", 0) < FORMAT_RETRIES
+        if not free and self.state["corrections"] >= self.packet["max_corrections"]:
             raise RunnerError("Correction budget exhausted", category="corrections_exhausted")
         if triage and self.packet["luna_triage"]:
             decision = self.model("coordinator", feedback)
@@ -704,10 +708,14 @@ class Runner:
             raise RunnerError("Repeated failure; stronger primary review required", category="corrections_exhausted")
         # Recorded for later analysis only; the loop never reads it back. "call" is the model call
         # whose output caused the round (the worker's for a patch or a check, the reviewer's for a finding).
-        entry = {"round": self.state["corrections"] + 1, "cause": cause, "call": self.state["calls"], "at": time.time()}
-        self.checkpoint(phase="IMPLEMENT", corrections=self.state["corrections"] + 1,
-                        corrections_log=self.state.get("corrections_log", []) + [entry],
-                        feedback=feedback, failure_signature=signature)
+        # A format retry is logged like any other round but not charged to max_corrections.
+        log = self.state.get("corrections_log", [])
+        entry = {"round": len(log) + 1, "cause": cause, "call": self.state["calls"], "at": time.time()}
+        if free:
+            entry["format_retry"] = True
+        self.checkpoint(phase="IMPLEMENT", corrections=self.state["corrections"] + (0 if free else 1),
+                        format_retries=self.state.get("format_retries", 0) + (1 if free else 0),
+                        corrections_log=log + [entry], feedback=feedback, failure_signature=signature)
 
 
 COORDINATOR_SCHEMA = {"type": "object", "properties": {
