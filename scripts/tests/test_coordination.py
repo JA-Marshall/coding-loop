@@ -337,6 +337,24 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(state["phase"], "STOPPED")
         self.assertIn("coverage", state["reason"])
 
+    def test_a_review_may_also_cover_owned_files_left_unchanged_but_nothing_else(self):
+        self.packet["owned_files"].append("untouched.txt")
+        adapter = Adapter()
+        def covering(extra):
+            def route(runner, role, feedback):
+                result = adapter(runner, role, feedback)
+                if role == "reviewer":
+                    result["covered_files"] = ["sample.txt", extra]
+                return result
+            return route
+        state = self.runner(covering("untouched.txt")).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.run_dir = self.home / "run-2"
+        git(self.root, "checkout", "--", ".")
+        state = self.runner(covering("elsewhere.txt")).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertIn("covers files outside the packet: elsewhere.txt", state["reason"])
+
     def test_review_stale_hash_and_findings_stop(self):
         self.packet["max_corrections"] = 0
         state = self.runner(Adapter([finding()])).run()

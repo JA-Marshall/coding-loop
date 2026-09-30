@@ -914,16 +914,29 @@ class Runner:
         self.checkpoint(logged=True)
 
     def check_review(self, result, names):
-        if (not isinstance(result, dict)
-                or set(result) != {"candidate", "covered_files", "acceptance", "findings"}
-                or result["candidate"] != self.state["candidate"]
-                or not isinstance(result["covered_files"], list)
-                or not all(isinstance(v, str) for v in result["covered_files"])
-                or sorted(result["covered_files"]) != names
-                or result["acceptance"] != self.packet["acceptance"]
-                or not isinstance(result["findings"], list)
-                or not all(valid_finding(v) for v in result["findings"])):
-            raise RunnerError("Review is malformed, stale or missing full coverage")
+        """A review must answer for this candidate, every changed file and every acceptance item.
+
+        Covering more than the changed files is allowed when the extra files are owned: a reviewer
+        that reads the packet may list an owned file the worker left alone."""
+        problem = None
+        if not isinstance(result, dict) or set(result) != {"candidate", "covered_files", "acceptance", "findings"}:
+            problem = "wrong fields"
+        elif result["candidate"] != self.state["candidate"]:
+            problem = "stale candidate"
+        elif (not isinstance(result["covered_files"], list)
+                or not all(isinstance(v, str) for v in result["covered_files"])):
+            problem = "covered_files is not a list of paths"
+        elif not set(names) <= set(result["covered_files"]):
+            problem = "changed files not covered: " + ", ".join(sorted(set(names) - set(result["covered_files"])))
+        elif not set(result["covered_files"]) - set(names) <= set(self.packet["owned_files"]):
+            problem = "covers files outside the packet: " + ", ".join(
+                sorted(set(result["covered_files"]) - set(names) - set(self.packet["owned_files"])))
+        elif result["acceptance"] != self.packet["acceptance"]:
+            problem = "acceptance items differ from the packet's"
+        elif not isinstance(result["findings"], list) or not all(valid_finding(v) for v in result["findings"]):
+            problem = "invalid findings"
+        if problem:
+            raise RunnerError("Review is malformed, stale or missing full coverage: " + problem)
 
     def rounds(self):
         """Charged correction rounds so far, of either budget: numbers each round's check logs."""
