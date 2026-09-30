@@ -118,7 +118,8 @@ def fingerprint(root):
 def validate_packet(packet):
     required = {"id", "checkout", "base_sha", "branch", "objective", "acceptance",
                 "owned_files", "checks", "worker_model", "worker_reasoning", "plan"}
-    optional = {"max_corrections", "max_calls", "call_timeout", "total_timeout", "luna_triage", "advisory_review"}
+    optional = {"max_corrections", "max_calls", "call_timeout", "total_timeout", "luna_triage", "advisory_review",
+                "hidden_overlay"}
     if not isinstance(packet, dict) or not required <= packet.keys() or packet.keys() - required - optional:
         raise RunnerError("Packet fields do not match the documented contract")
     for key in required - {"owned_files", "checks", "acceptance"}:
@@ -157,6 +158,9 @@ def validate_packet(packet):
         raise RunnerError("luna_triage must be a boolean")
     if type(packet.setdefault("advisory_review", False)) is not bool:
         raise RunnerError("advisory_review must be a boolean")
+    if "hidden_overlay" in packet and not (isinstance(packet["hidden_overlay"], str)
+                                           and Path(packet["hidden_overlay"]).is_absolute()):
+        raise RunnerError("hidden_overlay must be an absolute directory path")
     limits = {"max_corrections": (2, 0, 2), "max_calls": (6, 1, 7),
               "call_timeout": (2700, 1, 2700), "total_timeout": (28800, 1, 28800)}
     for key, (default, low, high) in limits.items():
@@ -164,6 +168,66 @@ def validate_packet(packet):
         if type(value) is not int or not low <= value <= high:
             raise RunnerError("Invalid bounded limit: " + key)
     return packet
+
+
+def shown_packet(packet):
+    """The packet as a model sees it: where the hidden check files are kept is the supervisor's business."""
+    return {key: value for key, value in packet.items() if key != "hidden_overlay"}
+
+
+def overlay_files(root, directory, owned):
+    """Relative names of the hidden check files under directory, refused if one could alter the candidate."""
+    directory = Path(directory).resolve()
+    if not directory.is_dir() or directory == root or root in directory.parents or directory in root.parents:
+        raise RunnerError("Hidden overlay must be an existing directory outside the candidate checkout")
+    names = []
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise RunnerError("Hidden overlay holds something other than plain files")
+        if path.is_file():
+            name = relative_file(path.relative_to(directory).as_posix())
+            if name in owned:
+                raise RunnerError("Hidden overlay would replace an owned file: " + name)
+            target = root / name
+            if any(parent.is_symlink() for parent in (target, *target.parents)) or (target.exists() and not target.is_file()):
+                raise RunnerError("Hidden overlay path is not a plain file in the checkout: " + name)
+            names.append(name)
+    if not names:
+        raise RunnerError("Hidden overlay is empty")
+    return names
+
+
+@contextmanager
+def hidden_overlay(root, directory, owned):
+    """Place the hidden check files over the checkout for one check command, then put back what was there.
+
+    The files judge the candidate and are never part of it: they are absent whenever a
+    model reads the checkout, the candidate is fingerprinted or the review diff is taken.
+    """
+    names = overlay_files(root, directory, owned)
+    before, created = {}, []
+    try:
+        for name in names:
+            target = root / name
+            before[name] = target.read_bytes() if target.exists() else None
+            for parent in reversed(target.relative_to(root).parents[:-1]):
+                if not (root / parent).exists():
+                    (root / parent).mkdir()
+                    created.append(root / parent)
+            target.write_bytes((Path(directory) / name).read_bytes())
+        yield names
+    finally:
+        for name, data in before.items():
+            if data is None:
+                (root / name).unlink(missing_ok=True)
+            else:
+                (root / name).write_bytes(data)
+        for parent in reversed(created):
+            try:
+                parent.rmdir()
+            except OSError:
+                # The check left something there; the candidate fingerprint will say so.
+                pass
 
 
 @contextmanager
@@ -358,6 +422,11 @@ class Runner:
                    PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0")
         return env
 
+    def hidden_checks(self):
+        if "hidden_overlay" not in self.packet:
+            return nullcontext()
+        return hidden_overlay(self.root, self.packet["hidden_overlay"], self.packet["owned_files"])
+
     def model(self, role, feedback):
         self.assert_candidate()
         if self.state["calls"] >= self.packet["max_calls"]:
@@ -377,6 +446,9 @@ class Runner:
             raise RunnerError("HEAD must match the frozen base SHA")
         if git(self.root, "branch", "--show-current").decode().strip() != self.packet["branch"]:
             raise RunnerError("Wrong branch")
+        if "hidden_overlay" in self.packet:
+            # Refuse an unusable overlay before any model call is paid for.
+            overlay_files(self.root, self.packet["hidden_overlay"], self.packet["owned_files"])
         with (checkout_lock(self.root) if inherited_lock is None else nullcontext(inherited_lock)) as self.lock_fd:
             self.run_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chmod(self.run_dir, 0o700)
@@ -428,8 +500,9 @@ class Runner:
                     elif phase == "CHECKS":
                         checks = []
                         for check in self.packet["checks"]:
-                            code = self.command(check["argv"], check["timeout"],
-                                                f"check-{self.state['corrections']}-{check['id']}")
+                            with self.hidden_checks():
+                                code = self.command(check["argv"], check["timeout"],
+                                                    f"check-{self.state['corrections']}-{check['id']}")
                             self.assert_candidate()
                             checks.append({"id": check["id"], "exit_code": code,
                                            "log": str(self.run_dir / f"check-{self.state['corrections']}-{check['id']}.log")})
@@ -672,7 +745,7 @@ class CodexAdapter:
         for name in runner.packet["owned_files"]:
             path = runner.root / name
             sources[name] = {"exists": path.exists(), "bytes": path.stat().st_size if path.exists() else 0}
-        prompt = (template + "\nPACKET:\n" + canonical(runner.packet)
+        prompt = (template + "\nPACKET:\n" + canonical(shown_packet(runner.packet))
                   + "\nOWNED SOURCE MANIFEST:\n" + canonical(sources)
                   + "\nEVIDENCE:\n" + feedback)
         record_prompt(runner, number, role, prompt)

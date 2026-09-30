@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from .runner import (REVIEW_MODEL, REVIEW_SCHEMA, ROLE_SCHEMAS, ROLE_TEMPLATES, RunnerError, canonical,
-                     claude_call, claude_worker, codex_model, git, is_claude, record_prompt, save_json)
+                     claude_call, claude_worker, codex_model, git, is_claude, record_prompt, save_json, shown_packet)
 
 
 def snapshot(root, destination):
@@ -72,7 +72,7 @@ class IsolatedAdapter:
         schema = runner.run_dir / f"schema-{number}.json"
         output = runner.run_dir / f"output-{number}.json"
         save_json(schema, ROLE_SCHEMAS[role])
-        packet = dict(runner.packet, checkout=str(source))
+        packet = dict(shown_packet(runner.packet), checkout=str(source))
         prompt = (Path(__file__).with_name(ROLE_TEMPLATES.get(role, role) + ".md").read_text()
                   + "\nThis is an isolated source snapshot. Read with targeted searches. "
                     "No checks or writes here. Return your complete structured result.\nPACKET:\n"

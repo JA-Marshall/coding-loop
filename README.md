@@ -120,6 +120,22 @@ python3 -m scripts.coordination.runner examples/packet.json --directory /some/ne
 
 The packet must name an absolute checkout, an exact 40-character base SHA, a `codex/` branch, the owned files, at least one check command, and the worker model. See `examples/packet.json` and the contract in `validate_packet` in `runner.py`. The run directory must be outside the checkout and must not already exist.
 
+## Running a packet derived from a merged pull request
+
+A merged pull request with tests can be posed as a task: reproduce the product change from the base commit, judged by the pull request's own tests. `derived.py` runs such a packet on a public repository that has no plan lifecycle.
+
+```sh
+python3 -m scripts.coordination.derived prepare packet.json --source /path/to/clone --directory /private/derived/some-pr
+python3 -m scripts.coordination.derived validate --directory /private/derived/some-pr --python /path/to/env/bin/python
+python3 -m scripts.coordination.derived run --directory /private/derived/some-pr --worker-model gpt-5.6-sol --worker-reasoning high --auth-home ~/.codex --live
+```
+
+- `prepare` clones at the base commit and saves the test files from the merge commit outside the checkout. The packet's `hidden_overlay` names that directory. The runner places those files over the checkout only while a check command runs and puts back what was there before the candidate is fingerprinted, reviewed or read by a model.
+- `validate` makes no model call. The checks must fail at the base commit and pass once the merged change to the owned files is applied; a packet that does neither cannot judge an attempt. `--python` is an interpreter that already holds the repository's test dependencies for that base commit, and it replaces a leading `python` in each check command.
+- `run` makes one attempt in a fresh checkout under `attempts/`: one worker and the primary reviewer, with triage and the advisory review off. Every model call reads an isolated source snapshot without Git history, so the merged change cannot be read from the clone.
+
+When a check fails, the worker's correction is given an excerpt of the check log, as it is for any packet. For a derived packet that excerpt comes from the hidden tests, so a corrected attempt has seen part of them; a one-pass attempt has not.
+
 ## Running a batch
 
 ```sh
@@ -137,6 +153,7 @@ This was extracted, not generalised. Things you will want to change:
 - `configure.py` hardcodes the repository slug, the three check commands and the queue file name.
 - `checks.py` assumes a Django project and a dedicated PostgreSQL cluster on port 55442.
 - `batch.py` writes plan files under `docs/plans/tasks/` in the lifecycle described by `PLANS.md` and validated by `scripts/validate_plans.py`. If your repo has no such lifecycle, `prepare` and the `COMMIT` phase are the places to simplify.
+- `derived.py` assumes the target repository's tests run with an interpreter you prepared; it builds no environment.
 - `keep-awake.ps1` is a Windows helper that stops the host sleeping while a run is live under WSL.
 
 ## Origin
