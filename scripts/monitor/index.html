@@ -708,7 +708,7 @@ footer.note a{color:var(--running)}
       }
     }
     var aria = 'Timeline from ' + clock(t0) + ' to the ' + clock(t1) + ' deadline. ' + (summary.join('. ') || 'No packet has started.') + '. Now ' + clock(end) + '.';
-    var tapeCaption = noDeadline ? h(clock(t0)) + ' to ' + h(clock(end)) + ' · one row per phase: builds, reviews and fixes' : h(clock(t0)) + ' to the ' + h(clock(t1)) + ' deadline · each tick is one model call';
+    var tapeCaption = noDeadline ? h(clock(t0)) + ' to ' + h(clock(end)) + ' · one row per phase: builds, tests, reviews and fixes' : h(clock(t0)) + ' to the ' + h(clock(t1)) + ' deadline · each tick is one model call';
     return '<figure class="panel tape" aria-label="Timeline"><header><h2>Tonight</h2><span class="muted">' +
       tapeCaption + (dayOf(t0) !== dayOf(now) ? ' · started ' + h(dayOf(t0)) : '') + '</span></header>' +
       '<div class="scroll"><svg viewBox="0 0 1000 ' + height + '" role="img" aria-label="' + h(aria) + '">' + svg.join('') + '</svg></div>' +
@@ -716,7 +716,7 @@ footer.note a{color:var(--running)}
       '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>running</span>' +
       '<span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>waiting for you</span>' +
       '<span><i style="background:var(--failed-soft);border:1px solid var(--failed)"></i>broke</span>' +
-      (b.mode === 'phases' ? '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>build or fix</span><span><i style="border:1px dashed var(--running)"></i>review</span><span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>arbiter</span><span><i style="background:var(--sunken);border:1px solid var(--muted)"></i>tests</span>' : '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>') +
+      (b.mode === 'phases' ? '<span><i style="background:var(--running-soft);border:1px solid var(--running)"></i>build or fix</span><span><i style="background:var(--sunken);border:1px solid var(--muted)"></i>tests</span><span><i style="border:1px dashed var(--running)"></i>review</span><span><i style="background:var(--attention-soft);border:1px solid var(--attention)"></i>arbiter</span>' : '<span><i style="background:var(--fg);opacity:.7;width:2px"></i>model call</span>') +
       '<span><i style="background:var(--sunken);border:1px solid var(--hair)"></i>not yet</span></div>' +
       '<figcaption>' + (b.mode === 'phases' ? 'Times come from the coordinator log\'s own timestamps.' : 'Times come from file modification times until the event log ships, so treat them as approximate to a minute.') + '</figcaption></figure>';
   }
