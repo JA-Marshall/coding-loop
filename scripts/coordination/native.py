@@ -105,19 +105,19 @@ def build_image():
 
 # --- the copy -------------------------------------------------------------------------------------------------
 
-def base_git(git_dir, work, *args, data=None, timeout=120):
+def base_git(git_dir, work, *args, data=None, timeout=120, file_mode=False):
     """Git on the copy through the loop's own repository, kept outside the copy.
 
     The model can rewrite /work/.git, including hooks or config that would run a program, so the
     loop never uses it. No user or system config either, so .gitattributes in the copy can name
-    no filter that exists here.
+    no filter that exists here. Mode changes are ignored (file_mode=False) unless asked for.
     """
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(git_dir), "GIT_CONFIG_NOSYSTEM": "1",
            "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0", "LANG": "C"}
     try:
         result = subprocess.run(
             ["git", "--git-dir=" + str(git_dir), "--work-tree=" + str(work), "-c", "core.fsmonitor=false",
-             "-c", "core.hooksPath=/dev/null", "-c", "core.fileMode=false", "-c", "core.quotePath=false",
+             "-c", "core.hooksPath=/dev/null", "-c", "core.fileMode=" + str(file_mode).lower(), "-c", "core.quotePath=false",
              "-c", "user.name=coding-loop", "-c", "user.email=coding-loop@invalid", "-c", "commit.gpgSign=false",
              *args], input=data, cwd=work, env=env, capture_output=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -130,11 +130,13 @@ def base_git(git_dir, work, *args, data=None, timeout=120):
 def make_copy(root, source, git_dir):
     """A writable copy of the candidate at source, committed twice: for the model in source/.git, and for the loop in git_dir."""
     snapshot(root, source)
+    base_git(git_dir, source, "init", "-q")
     for repository in (source / ".git", git_dir):
-        if repository == git_dir:
-            base_git(git_dir, source, "init", "-q")
-        base_git(repository, source, "add", "-A", "-f")
-        base_git(repository, source, "commit", "-q", "--allow-empty", "--no-verify", "-m", "Candidate before this call")
+        # The model's repository records the files' real modes, so its own `git status` starts clean.
+        mode = repository != git_dir
+        base_git(repository, source, "add", "-A", "-f", file_mode=mode)
+        base_git(repository, source, "commit", "-q", "--allow-empty", "--no-verify", "-m", "Candidate before this call",
+                 file_mode=mode)
     return base_git(git_dir, source, "rev-parse", "HEAD").decode().strip()
 
 
@@ -241,7 +243,7 @@ def login_root():
 
 
 def file_digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path and path.is_file() else None
 
 
 def codex_home(home, model, auth_home):
@@ -259,7 +261,7 @@ def codex_home(home, model, auth_home):
     if model.startswith(META_PREFIX):
         # The Meta key goes in the call's own config and the ChatGPT login is not sent along.
         meta_provider(directory)
-        return directory / "config.toml"
+        return None  # an API key in the call's config: nothing to refresh
     return directory / "auth.json"
 
 
@@ -458,7 +460,8 @@ def native_worker(runner, feedback, auth_home, python):
         }
         ensure_egress()
         code, killed = run_container(runner, spec)
-        refreshed = file_digest(login) != before
+        # Whether the CLI refreshed the copied OAuth tokens; the real login was not updated.
+        refreshed = login is not None and file_digest(login) != before
         events = read_events(runner.run_dir / f"model-{number}.log")
         if claude:
             result, tools, context = claude_record(events)

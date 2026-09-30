@@ -222,6 +222,18 @@ class NativeWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "virtual environment"):
             native.python_mounts("/bin/sh", [], self.home / "shims-3")
 
+    def test_the_models_own_repository_starts_clean_and_keeps_executable_bits(self):
+        source, git_dir = self.home / "copy", self.home / "copy.git"
+        base = native.make_copy(self.root, source, git_dir)
+        self.assertEqual(git(source, "status", "--porcelain"), b"")
+        self.assertIn(b"100755", git(source, "ls-files", "-s", "run.sh"))
+        (source / "run.sh").chmod(0o644)
+        (source / "sample.txt").write_text("new\n")
+        diff, mine, other = native.take_changes(git_dir, source, base, ["sample.txt", "run.sh"])
+        # A mode change alone is not a change the loop takes.
+        self.assertEqual((mine, other), (["sample.txt"], []))
+        self.assertNotIn("mode", diff)
+
     def test_an_unchanged_copy_with_a_summary_is_a_blocker(self):
         state = self.attempt(FakeModel(message="Blocked: the owned files cannot express this"))
         self.assertEqual((state["phase"], state["stop_category"]), ("STOPPED", "no_patch"))
