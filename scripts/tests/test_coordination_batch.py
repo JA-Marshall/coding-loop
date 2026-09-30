@@ -117,6 +117,20 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(self.batch.run(), result)
         self.assertEqual(len(self.github.merges), 2)
 
+    def test_timeline_records_when_each_packet_entered_each_phase(self):
+        result = self.batch.run()
+        self.assertEqual(result["phase"], "COMPLETE", result)
+        steps = [(entry["index"], entry["phase"]) for entry in result["timeline"]]
+        packet = ["PREPARE", "RUN", "COMMIT", "PUSH", "PR", "CI", "MERGE"]
+        self.assertEqual(steps, [(0, p) for p in packet] + [(1, p) for p in packet] + [(2, "COMPLETE")])
+        times = [entry["at"] for entry in result["timeline"]]
+        self.assertEqual(times, sorted(times))
+
+    def test_timeline_ends_where_a_failed_ci_stopped_the_batch(self):
+        self.github.fail_ci = True
+        result = self.batch.run()
+        self.assertEqual([(e["index"], e["phase"]) for e in result["timeline"]][-2:], [(0, "CI"), (0, "STOPPED")])
+
     def test_non_blocking_reviewer_notes_reach_the_pull_request(self):
         self.authority.stop()
         self.batch = Batch(self.manifest, self.directory / "run", self.github, NotesAdapter())

@@ -100,6 +100,40 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("No PR", (self.run_dir / "report.md").read_text())
         self.assertEqual(self.runner().run(resume=True)["phase"], "LOCAL_REVIEWED")
 
+    def test_checkpoint_records_the_pair_and_when_each_phase_began(self):
+        before = time.time()
+        state = self.runner().run()
+        self.assertEqual(state["pair"], {"worker": "codex:gpt-5.6-terra:medium", "reviewer": "claude:claude-opus-5-5:high"})
+        self.assertEqual([entry["phase"] for entry in state["timeline"]],
+                         ["IMPLEMENT", "APPLYING", "CHECKS", "REVIEW", "LOCAL_REVIEWED"])
+        times = [entry["at"] for entry in state["timeline"]]
+        self.assertEqual(times, sorted(times))
+        self.assertTrue(before <= times[0] and times[-1] <= time.time())
+        self.assertEqual(json.loads((self.run_dir / "state.json").read_text())["timeline"], state["timeline"])
+        # A finished run is returned as recorded: resuming adds nothing.
+        self.assertEqual(self.runner().run(resume=True)["timeline"], state["timeline"])
+
+    def test_timeline_follows_corrections_and_ends_at_the_stop(self):
+        self.packet.update(max_corrections=1, luna_triage=False, advisory_review=True,
+                           worker_model="claude-opus-5-5", worker_reasoning="high")
+        state = self.runner(lambda *_: {"patch": "not a diff", "summary": "broken"}).run()
+        self.assertEqual(state["phase"], "STOPPED")
+        self.assertEqual([entry["phase"] for entry in state["timeline"]],
+                         ["IMPLEMENT", "APPLYING", "IMPLEMENT", "APPLYING", "STOPPED"])
+        self.assertEqual(state["pair"], {"worker": "claude:claude-opus-5-5:high", "reviewer": "claude:claude-opus-5-5:high",
+                                         "advisory": "codex:gpt-5.6-sol:high"})
+
+    def test_checkpoint_from_before_the_timeline_still_resumes(self):
+        self.runner().run()
+        state = json.loads((self.run_dir / "state.json").read_text())
+        del state["timeline"], state["pair"]
+        state["phase"] = "REVIEW"
+        save_json(self.run_dir / "state.json", state)
+        resumed = self.runner().run(resume=True)
+        self.assertEqual(resumed["phase"], "LOCAL_REVIEWED")
+        self.assertEqual([entry["phase"] for entry in resumed["timeline"]], ["LOCAL_REVIEWED"])
+        self.assertNotIn("pair", resumed)
+
     def test_wrong_branch_and_base_rejected_without_calls(self):
         for key, value in (("branch", "codex/wrong"), ("base_sha", "a" * 40)):
             with self.subTest(key=key):

@@ -289,6 +289,11 @@ class Runner:
         self.lock_fd = None
 
     def checkpoint(self, **updates):
+        # When each phase began, so an attempt's wall clock and phase timing survive the run.
+        # Recorded for later analysis only; the loop never reads it back.
+        phase = updates.get("phase")
+        if phase is not None and phase != self.state.get("phase"):
+            updates["timeline"] = self.state.get("timeline", []) + [{"phase": phase, "at": time.time()}]
         self.state.update(updates)
         save_json(self.run_dir / "state.json", self.state)
         report = (f"# Run {self.packet['id']}\n\nStatus: {self.state['phase']}\n\n"
@@ -395,7 +400,9 @@ class Runner:
                     raise RunnerError("Start from a clean checkout; preserve existing work first")
                 self.state = {"packet_hash": packet_hash, "phase": "IMPLEMENT", "calls": 0,
                               "corrections": 0, "candidate": fingerprint(self.root), "inflight": None,
-                              "deadline": time.time() + self.packet["total_timeout"], "feedback": ""}
+                              "deadline": time.time() + self.packet["total_timeout"], "feedback": "",
+                              "pair": configured_pair(self.packet),
+                              "timeline": [{"phase": "IMPLEMENT", "at": time.time()}]}
                 save_json(self.run_dir / "packet.json", self.packet)
                 self.checkpoint()
             try:
@@ -636,6 +643,19 @@ ROLE_TEMPLATES = {}
 def codex_model(packet, role):
     return {"worker": (packet["worker_model"], packet["worker_reasoning"]), "advisory": ADVISORY_MODEL,
             "coordinator": ("gpt-6-luna", "medium")}[role]
+
+
+def role_model(packet, role):
+    """backend:model:effort that serves a role, as both adapters dispatch it."""
+    model, effort = REVIEW_MODEL if role == "reviewer" else codex_model(packet, role)
+    backend = "claude" if role == "reviewer" or (role == "worker" and is_claude(model)) else "codex"
+    return backend + ":" + model + ":" + effort
+
+
+def configured_pair(packet):
+    """The models this packet runs with, kept in the checkpoint because the reviewers are pinned in code."""
+    roles = ("worker", "reviewer") + (("advisory",) if packet["advisory_review"] else ())
+    return {role: role_model(packet, role) for role in roles}
 
 
 class CodexAdapter:

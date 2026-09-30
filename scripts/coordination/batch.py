@@ -237,6 +237,11 @@ class Batch:
         return digest(data)
 
     def checkpoint(self, **updates):
+        # When each packet entered each phase, so PR, CI and merge times survive the run.
+        # Recorded for later analysis only; the loop never reads it back.
+        phase, index = updates.get("phase", self.state.get("phase")), updates.get("index", self.state.get("index"))
+        if (phase, index) != (self.state.get("phase"), self.state.get("index")):
+            updates["timeline"] = self.state.get("timeline", []) + [{"phase": phase, "index": index, "at": time.time()}]
         self.state.update(updates)
         save_json(self.directory / "state.json", self.state)
         lines = ["# Overnight run " + self.manifest["id"], "", "Status: " + self.state["phase"],
@@ -358,7 +363,8 @@ class Batch:
                 clean(self.root)
                 self.state = {"manifest_hash": manifest_hash, "runtime_hash": self.runtime_hash(), "phase": "PREPARE", "index": 0,
                               "calls": 0, "tokens": 0, "completed": [],
-                              "deadline": time.time() + self.manifest["total_timeout"]}
+                              "deadline": time.time() + self.manifest["total_timeout"],
+                              "timeline": [{"phase": "PREPARE", "index": 0, "at": time.time()}]}
                 save_json(self.directory / "manifest.json", self.manifest)
                 self.checkpoint()
             try:
