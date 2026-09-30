@@ -18,10 +18,16 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 
 
 class RunnerError(Exception):
     """A fail-closed runner condition, safe to summarize without raw tool output."""
+
+    def __init__(self, *args, category=None):
+        super().__init__(*args)
+        # Why the run stopped, for the attempt log; unset means a harness failure.
+        self.category = category
 
 
 class PatchFormatError(RunnerError):
@@ -342,13 +348,22 @@ def candidate_diff(root, base):
 
 
 class Runner:
-    def __init__(self, packet, run_dir, adapter):
+    def __init__(self, packet, run_dir, adapter, *, decision=None, attempt_log=None):
         self.packet = validate_packet(dict(packet))
         self.root = Path(self.packet["checkout"]).resolve()
         self.run_dir = Path(run_dir).resolve()
         if self.root == self.run_dir or self.root in self.run_dir.parents or self.run_dir in self.root.parents:
             raise RunnerError("Run directory must be outside the candidate checkout")
         self.adapter = adapter
+        # The launcher's routing decision, recorded untouched; the loop never acts on it.
+        try:
+            if decision is not None and not isinstance(decision, dict):
+                raise TypeError
+            canonical(decision)  # refuse now what could not be logged later
+        except (TypeError, ValueError):
+            raise RunnerError("Routing decision must be a JSON object") from None
+        self.decision = decision
+        self.attempt_log = Path(attempt_log).resolve() if attempt_log else self.run_dir.parent / "attempts.jsonl"
         self.state = {}
         self.lock_fd = None
 
@@ -376,7 +391,7 @@ class Runner:
     def remaining(self):
         remaining = self.state["deadline"] - time.time()
         if remaining <= 0:
-            raise RunnerError("Total wall-clock budget exhausted")
+            raise RunnerError("Total wall-clock budget exhausted", category="budget_cap")
         return remaining
 
     def assert_candidate(self):
@@ -430,7 +445,7 @@ class Runner:
     def model(self, role, feedback):
         self.assert_candidate()
         if self.state["calls"] >= self.packet["max_calls"]:
-            raise RunnerError("Model call budget exhausted")
+            raise RunnerError("Model call budget exhausted", category="budget_cap")
         self.checkpoint(calls=self.state["calls"] + 1)
         result = self.adapter(self, role, feedback)
         self.assert_candidate()
@@ -463,7 +478,11 @@ class Runner:
                 if self.state.get("inflight") or self.state["phase"] == "APPLYING":
                     raise RunnerError("Interrupted operation needs manual reconciliation; no automatic replay")
                 self.assert_candidate()
+                # A checkpoint from before the attempt log has no id; it is adopted only while unfinished.
+                if "attempt_id" not in self.state and self.state["phase"] not in TERMINAL:
+                    self.state.update(attempt_id=uuid.uuid4().hex, decision=self.decision, logged=False)
                 if self.state["phase"] in TERMINAL:
+                    self.log_attempt()
                     return self.state
             else:
                 if resume:
@@ -473,7 +492,8 @@ class Runner:
                 self.state = {"packet_hash": packet_hash, "phase": "IMPLEMENT", "calls": 0,
                               "corrections": 0, "candidate": fingerprint(self.root), "inflight": None,
                               "deadline": time.time() + self.packet["total_timeout"], "feedback": "",
-                              "pair": configured_pair(self.packet),
+                              "pair": configured_pair(self.packet), "attempt_id": uuid.uuid4().hex,
+                              "decision": self.decision, "corrections_log": [], "logged": False,
                               "timeline": [{"phase": "IMPLEMENT", "at": time.time()}]}
                 save_json(self.run_dir / "packet.json", self.packet)
                 self.checkpoint()
@@ -488,13 +508,13 @@ class Runner:
                             raise RunnerError("Invalid worker result contract")
                         if isinstance(result["patch"], str) and not result["patch"].strip():
                             # The worker reports a blocker instead of a patch; surface its reason.
-                            raise RunnerError("Worker returned no patch: " + " ".join(result["summary"].split())[:500])
+                            raise RunnerError("Worker returned no patch: " + " ".join(result["summary"].split())[:500], category="no_patch")
                         self.checkpoint(phase="APPLYING")
                         try:
                             apply_patch(self.root, result["patch"], self.packet["owned_files"])
                         except PatchFormatError as exc:
                             self.assert_candidate()
-                            self.correct(str(exc), triage=False)
+                            self.correct(str(exc), "patch_failed", triage=False)
                             continue
                         self.checkpoint(phase="CHECKS", candidate=fingerprint(self.root))
                     elif phase == "CHECKS":
@@ -508,13 +528,13 @@ class Runner:
                                            "log": str(self.run_dir / f"check-{self.state['corrections']}-{check['id']}.log")})
                         self.checkpoint(checks={"candidate": self.state["candidate"], "results": checks})
                         if any(c["exit_code"] for c in checks):
-                            self.correct(check_failure_feedback(checks))
+                            self.correct(check_failure_feedback(checks), "check_failed")
                         else:
                             self.checkpoint(phase="REVIEW")
                     elif phase == "REVIEW":
                         diff, names = candidate_diff(self.root, self.packet["base_sha"])
                         if not names or not set(names) <= set(self.packet["owned_files"]):
-                            raise RunnerError("Candidate contains no changes or out-of-scope files")
+                            raise RunnerError("Candidate contains no changes or out-of-scope files", category="other")
                         # Keep every reviewed candidate, named by the review call it feeds,
                         # so each review can be replayed later; candidate.diff stays latest.
                         (self.run_dir / f"candidate-{self.state['calls'] + 1}.diff").write_text(diff)
@@ -530,7 +550,7 @@ class Runner:
                         # Only the primary reviewer's blocking findings cost a correction round;
                         # the rest travel with the candidate as reviewer notes for the owner.
                         if blocking_findings(result):
-                            self.correct("Review findings: " + canonical(blocking_findings(result)))
+                            self.correct("Review findings: " + canonical(blocking_findings(result)), "review_blocking")
                             continue
                         if self.packet["advisory_review"]:
                             # High-risk packets get a second, independent model family. Its
@@ -543,7 +563,7 @@ class Runner:
                             self.checkpoint(advisory=advisory)
                             if blocking_findings(advisory):
                                 raise RunnerError("Advisory reviewer raised blocking findings on a high-risk packet; "
-                                                  "owner review required before any PR")
+                                                  "owner review required before any PR", category="advisory_blocking")
                         if self.state["checks"]["candidate"] != self.state["candidate"]:
                             raise RunnerError("Checks are stale")
                         self.checkpoint(phase="LOCAL_REVIEWED", reason="Prescribed checks and complete-diff review passed")
@@ -552,8 +572,50 @@ class Runner:
             except (RunnerError, OSError, ValueError, subprocess.TimeoutExpired, KeyboardInterrupt) as exc:
                 # Keep in-flight marker on interrupted commands: restart never guesses.
                 reason = str(exc) if isinstance(exc, RunnerError) else type(exc).__name__ + "; inspect private evidence"
-                self.checkpoint(phase="STOPPED", reason=reason)
+                if isinstance(exc, KeyboardInterrupt):
+                    category = "operator_stop"
+                elif isinstance(exc, subprocess.TimeoutExpired):
+                    category = "budget_cap"
+                else:
+                    category = getattr(exc, "category", None) or "harness_failure"
+                self.checkpoint(phase="STOPPED", reason=reason, stop_category=category)
+            self.log_attempt()
             return self.state
+
+    def attempt_record(self):
+        state = self.state
+        try:
+            loop_version = git(Path(__file__).resolve().parent, "rev-parse", "HEAD").decode().strip()
+        except RunnerError:
+            loop_version = None
+        # Model-written text stays out: a worker's blocker summary can quote a private repository.
+        reason = "Worker returned no patch" if state.get("stop_category") == "no_patch" else state.get("reason")
+        checks = [{"id": c["id"], "exit_code": c["exit_code"]} for c in (state.get("checks") or {}).get("results", [])]
+        return {"attempt_id": state["attempt_id"], "run_dir": str(self.run_dir), "packet_id": self.packet["id"],
+                "packet_hash": state["packet_hash"], "pair": state.get("pair"), "decision": state.get("decision"),
+                "phase": state["phase"], "corrections_log": state.get("corrections_log", []),
+                "stop_category": state.get("stop_category"), "reason": reason, "timeline": state.get("timeline", []),
+                "usage": state.get("usage", []), "checks": checks,
+                "blocking_findings": len(blocking_findings(state.get("review") or {})), "loop_version": loop_version}
+
+    def log_attempt(self):
+        """Append the attempt's one line. A crash between the append and the checkpoint below repeats
+        the line on resume, so readers dedupe on attempt_id. Never changes how the run ends."""
+        if "attempt_id" not in self.state or self.state.get("logged"):
+            return
+        try:
+            line = (canonical(self.attempt_record()) + "\n").encode()
+            self.attempt_log.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.attempt_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, line)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except (OSError, ValueError, TypeError) as exc:
+            print("Attempt log not written: " + type(exc).__name__, file=sys.stderr)
+            return
+        self.checkpoint(logged=True)
 
     def check_review(self, result, names):
         if (not isinstance(result, dict)
@@ -567,9 +629,9 @@ class Runner:
                 or not all(valid_finding(v) for v in result["findings"])):
             raise RunnerError("Review is malformed, stale or missing full coverage")
 
-    def correct(self, feedback, *, triage=True):
+    def correct(self, feedback, cause, *, triage=True):
         if self.state["corrections"] >= self.packet["max_corrections"]:
-            raise RunnerError("Correction budget exhausted")
+            raise RunnerError("Correction budget exhausted", category="corrections_exhausted")
         if triage and self.packet["luna_triage"]:
             decision = self.model("coordinator", feedback)
             if (set(decision) != {"action", "reason"} or not isinstance(decision["action"], str)
@@ -577,13 +639,17 @@ class Runner:
                     or not isinstance(decision["reason"], str)):
                 raise RunnerError("Invalid coordinator result")
             if decision["action"] == "STOP":
-                raise RunnerError("Luna requested stronger primary review; inspect coordinator result")
+                raise RunnerError("Luna requested stronger primary review; inspect coordinator result", category="other")
         # Candidate included: changed code with the same failed check isn't an
         # identical attempt. Overall budgets still cap every correction loop.
         signature = digest((self.state["candidate"] + feedback).encode())
         if signature == self.state.get("failure_signature"):
-            raise RunnerError("Repeated failure; stronger primary review required")
+            raise RunnerError("Repeated failure; stronger primary review required", category="corrections_exhausted")
+        # Recorded for later analysis only; the loop never reads it back. "call" is the model call
+        # whose output caused the round (the worker's for a patch or a check, the reviewer's for a finding).
+        entry = {"round": self.state["corrections"] + 1, "cause": cause, "call": self.state["calls"], "at": time.time()}
         self.checkpoint(phase="IMPLEMENT", corrections=self.state["corrections"] + 1,
+                        corrections_log=self.state.get("corrections_log", []) + [entry],
                         feedback=feedback, failure_signature=signature)
 
 
@@ -832,6 +898,8 @@ def main(argv=None):
     parser.add_argument("packet", type=Path)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--attempt-log", type=Path, help="JSON-lines file the finished attempt is appended to (default: attempts.jsonl beside the run directory)")
+    parser.add_argument("--decision-file", type=Path, help="JSON object recording the routing decision; stored untouched, never acted on")
     parser.add_argument("--execute", action="store_true", help="Launch paid calls after plan authority checks; otherwise validate only")
     args = parser.parse_args(argv)
     try:
@@ -839,7 +907,8 @@ def main(argv=None):
         root = Path(packet["checkout"]).resolve()
         if root == args.packet.resolve() or root in args.packet.resolve().parents:
             raise RunnerError("Operator packet must be outside candidate checkout")
-        runner = Runner(packet, args.run_dir, CodexAdapter())
+        decision = json.loads(args.decision_file.read_text()) if args.decision_file else None
+        runner = Runner(packet, args.run_dir, CodexAdapter(), decision=decision, attempt_log=args.attempt_log)
         if not args.execute:
             print("Packet contract valid; no models, checks or patches executed.")
             return 0

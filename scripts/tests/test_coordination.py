@@ -880,6 +880,163 @@ agent_strategy: SEQUENTIAL_WORKER
             with self.assertRaises(RunnerError):
                 validate_packet(dict(self.packet, **change))
 
+    # The attempt log: one line per attempt, written by the loop when the run ends.
+    def log_lines(self, path=None):
+        path = path or self.home / "attempts.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_finished_run_appends_one_line_and_resume_does_not_repeat_it(self):
+        decision = {"policy": "random", "action": "cheap", "probability": 0.5, "explore": True, "parent_packet": None}
+        state = Runner(self.packet, self.run_dir, Adapter(), decision=decision).run()
+        (line,) = self.log_lines()
+        self.assertEqual(line["attempt_id"], state["attempt_id"])
+        self.assertEqual((line["packet_id"], line["phase"], line["stop_category"]), ("selling-fixture", "LOCAL_REVIEWED", None))
+        self.assertEqual((line["run_dir"], line["pair"], line["decision"]), (str(self.run_dir), state["pair"], decision))
+        self.assertEqual((line["timeline"], line["corrections_log"], line["blocking_findings"]),
+                         (state["timeline"], [], 0))
+        self.assertEqual(line["checks"], [{"id": "content", "exit_code": 0}])
+        self.assertEqual([u["role"] for u in line["usage"]], [u["role"] for u in state.get("usage", [])])
+        self.assertEqual(line["packet_hash"], state["packet_hash"])
+        self.assertTrue(line["loop_version"] is None or len(line["loop_version"]) == 40)
+        # No packet text: the objective and acceptance stay in the packet file.
+        self.assertNotIn("Replace old with new", json.dumps(line))
+        self.assertTrue(state["logged"])
+        self.runner().run(resume=True)
+        self.assertEqual(len(self.log_lines()), 1)
+
+    def test_a_crash_between_append_and_checkpoint_repeats_the_line_with_the_same_id(self):
+        self.runner().run()
+        state = json.loads((self.run_dir / "state.json").read_text())
+        state["logged"] = False
+        save_json(self.run_dir / "state.json", state)
+        self.runner().run(resume=True)
+        first, second = self.log_lines()
+        self.assertEqual(first, second)
+        self.assertEqual(first["attempt_id"], state["attempt_id"])
+
+    def test_stopped_run_is_logged_once_with_its_category_and_resume_adds_nothing(self):
+        self.packet["max_corrections"] = 0
+        state = self.runner(Adapter([finding()])).run()
+        (line,) = self.log_lines()
+        self.assertEqual((line["phase"], line["stop_category"], line["blocking_findings"]), ("STOPPED", "corrections_exhausted", 1))
+        self.assertEqual(line["reason"], state["reason"])
+        self.runner().run(resume=True)
+        self.assertEqual(len(self.log_lines()), 1)
+
+    def test_every_kind_of_stop_has_its_category(self):
+        def category(adapter, **packet):
+            self.tmp2 = tempfile.TemporaryDirectory()
+            self.addCleanup(self.tmp2.cleanup)
+            git(self.root, "checkout", "--", "sample.txt")
+            state = Runner(dict(self.packet, **packet), Path(self.tmp2.name) / "run", adapter).run()
+            self.assertEqual(state["phase"], "STOPPED")
+            return state["stop_category"], self.log_lines(Path(self.tmp2.name) / "attempts.jsonl")[0]
+
+        def raises(exc):
+            def adapter(runner, role, feedback):
+                raise exc
+            return adapter
+
+        def advisory_blocks(runner, role, feedback):
+            result = Adapter()(runner, role, feedback)
+            if role == "advisory":
+                result["findings"] = [finding()]
+            return result
+
+        self.assertEqual(category(Adapter([finding()]), max_corrections=0)[0], "corrections_exhausted")
+        self.assertEqual(category(Adapter(), max_calls=1)[0], "budget_cap")
+        self.assertEqual(category(raises(KeyboardInterrupt()))[0], "operator_stop")
+        self.assertEqual(category(raises(RunnerError("Codex failed or returned no bounded structured result")))[0], "harness_failure")
+        self.assertEqual(category(raises(OSError("disk")))[0], "harness_failure")
+        self.assertEqual(category(advisory_blocks, advisory_review=True, luna_triage=False)[0], "advisory_blocking")
+        secret = "Blocked: quotes private_module.py"
+        cat, line = category(lambda *_: {"patch": "", "summary": secret})
+        self.assertEqual((cat, line["reason"]), ("no_patch", "Worker returned no patch"))
+        self.assertNotIn("private_module", json.dumps(line))
+
+    def test_corrections_record_their_cause_call_and_time(self):
+        self.packet["luna_triage"] = False
+        worker_calls = []
+
+        def adapter(runner, role, feedback):
+            if role == "worker":
+                worker_calls.append(1)
+                if len(worker_calls) == 1:
+                    return {"patch": "not a diff", "summary": "broken"}
+                if len(worker_calls) == 2:
+                    return {"patch": PATCH.replace("+new", "+bad"), "summary": "wrong text"}
+                return {"patch": PATCH.replace("-old", "-bad"), "summary": "fix"}
+            result = Adapter()(runner, role, feedback)
+            if len(worker_calls) == 3 and runner.state["corrections"] == 2:
+                result["findings"] = [finding()]
+            return result
+        self.packet["max_corrections"] = 2
+        state = self.runner(adapter).run()
+        self.assertEqual([(e["round"], e["cause"], e["call"]) for e in state["corrections_log"]],
+                         [(1, "patch_failed", 1), (2, "check_failed", 2)])
+        self.assertEqual(state["corrections"], len(state["corrections_log"]))
+        self.assertTrue(all(isinstance(e["at"], float) for e in state["corrections_log"]))
+        self.assertEqual(self.log_lines()[0]["corrections_log"], state["corrections_log"])
+
+    def test_review_findings_are_a_correction_cause(self):
+        reviews = []
+
+        def adapter(runner, role, feedback):
+            result = Adapter()(runner, role, feedback)
+            if role == "worker" and reviews:
+                return {"patch": PATCH.replace("-old", "-new").replace("+new", "+new "), "summary": "x"}
+            if role == "reviewer":
+                reviews.append(1)
+                if len(reviews) == 1:
+                    result["findings"] = [finding()]
+            return result
+        self.packet["luna_triage"] = False
+        state = self.runner(adapter).run()
+        self.assertEqual([(e["cause"], e["call"]) for e in state["corrections_log"]][:1], [("review_blocking", 2)])
+
+    def test_checkpoint_from_before_the_attempt_log_resumes_and_is_adopted_or_left_alone(self):
+        self.runner().run()
+        legacy = json.loads((self.run_dir / "state.json").read_text())
+        for key in ("attempt_id", "decision", "corrections_log", "logged", "stop_category"):
+            legacy.pop(key, None)
+        save_json(self.run_dir / "state.json", legacy)
+        # Finished before the log existed: returned as recorded, nothing appended.
+        self.assertEqual(self.runner().run(resume=True)["phase"], "LOCAL_REVIEWED")
+        self.assertEqual(len(self.log_lines()), 1)
+        # Unfinished: it completes and is logged under a new id.
+        legacy["phase"] = "REVIEW"
+        save_json(self.run_dir / "state.json", legacy)
+        resumed = self.runner().run(resume=True)
+        self.assertEqual(resumed["phase"], "LOCAL_REVIEWED")
+        self.assertEqual(self.log_lines()[-1]["attempt_id"], resumed["attempt_id"])
+        self.assertEqual(self.log_lines()[-1]["corrections_log"], [])
+
+    def test_decision_is_stored_untouched_and_a_launcher_can_name_the_log(self):
+        decision = {"policy": "p", "action": "split", "probability": 0.25, "explore": False, "parent_packet": "big-1"}
+        target = self.home / "elsewhere" / "log.jsonl"
+        state = Runner(self.packet, self.run_dir, Adapter(), decision=decision, attempt_log=target).run()
+        self.assertEqual(state["decision"], decision)
+        self.assertEqual(self.log_lines(target)[0]["decision"], decision)
+        self.assertEqual(self.log_lines(), [])
+        with self.assertRaises(RunnerError):
+            Runner(self.packet, self.home / "other", Adapter(), decision=["not", "an", "object"])
+        with self.assertRaises(RunnerError):
+            Runner(self.packet, self.home / "other", Adapter(), decision={"probability": {1}})
+
+    def test_a_log_that_cannot_be_written_does_not_change_the_run(self):
+        (self.home / "blocked").mkdir()
+        state = Runner(self.packet, self.run_dir, Adapter(), attempt_log=self.home / "blocked").run()
+        self.assertEqual((state["phase"], state["logged"]), ("LOCAL_REVIEWED", False))
+
+    def test_cli_flags_carry_the_decision_and_log_path(self):
+        (self.home / "decision.json").write_text('{"policy": "cli"}')
+        (self.home / "packet.json").write_text(json.dumps(self.packet))
+        with patch("scripts.coordination.runner.authorize_live"), patch("scripts.coordination.runner.CodexAdapter", Adapter):
+            code = main([str(self.home / "packet.json"), "--run-dir", str(self.run_dir), "--execute",
+                         "--decision-file", str(self.home / "decision.json"), "--attempt-log", str(self.home / "cli.jsonl")])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.log_lines(self.home / "cli.jsonl")[0]["decision"], {"policy": "cli"})
+
 
 class HookTests(unittest.TestCase):
     def test_pretool_uses_supported_deny_shape(self):

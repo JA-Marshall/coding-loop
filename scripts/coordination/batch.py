@@ -260,13 +260,13 @@ class Batch:
 
     def check_budget(self, current=None):
         if time.time() >= self.state["deadline"]:
-            raise RunnerError("Batch wall-clock deadline exhausted")
+            raise RunnerError("Batch wall-clock deadline exhausted", category="budget_cap")
         calls, tokens = self.state.get("calls", 0), self.state.get("tokens", 0)
         if current is not None:
             calls += current["calls"] - 1  # Runner increments immediately before dispatch.
             tokens += usage_count(current.get("usage", []))
         if calls >= self.manifest["max_calls"] or tokens >= self.manifest["max_reported_tokens"]:
-            raise RunnerError("Global model budget exhausted")
+            raise RunnerError("Global model budget exhausted", category="budget_cap")
 
     def assert_authority(self):
         authority = self.root / self.manifest["authority"]
@@ -372,7 +372,7 @@ class Batch:
                     if (self.directory / "STOP").exists():
                         raise RunnerError("Operator requested stop")
                     if time.time() >= self.state["deadline"]:
-                        raise RunnerError("Batch wall-clock deadline exhausted")
+                        raise RunnerError("Batch wall-clock deadline exhausted", category="budget_cap")
                     if self.state["runtime_hash"] != self.runtime_hash():
                         raise RunnerError("Supervisor controls changed during run")
                     self.assert_authority()

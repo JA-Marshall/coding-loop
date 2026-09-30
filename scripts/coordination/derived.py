@@ -183,7 +183,9 @@ def run(args):
         luna_triage=False, advisory_review=False,
         max_calls=6, max_corrections=2, call_timeout=1800, total_timeout=7200))
     save_json(attempt / "packet.json", loop_packet)
-    result = Runner(loop_packet, attempt / "run", IsolatedAdapter(args.auth_home)).run()
+    decision = json.loads(args.decision_file.read_text()) if args.decision_file else None
+    result = Runner(loop_packet, attempt / "run", IsolatedAdapter(args.auth_home), decision=decision,
+                    attempt_log=args.attempt_log).run()
     print(json.dumps({"phase": result["phase"], "calls": result["calls"], "corrections": result["corrections"],
                       "reason": result.get("reason"), "report": str(attempt / "run" / "report.md")}, indent=2))
     return 0 if result["phase"] == "LOCAL_REVIEWED" else 1
@@ -208,6 +210,8 @@ def main(argv=None):
     command.add_argument("--auth-home", type=Path, required=True, help="Codex home whose file login isolated calls copy")
     command.add_argument("--name", help="attempt name (default: the worker model and effort)")
     command.add_argument("--live", action="store_true", help="explicitly authorize real model calls")
+    command.add_argument("--attempt-log", type=Path, help="JSON-lines file the finished attempt is appended to (default: attempts.jsonl beside the run directory)")
+    command.add_argument("--decision-file", type=Path, help="JSON object recording the routing decision; stored untouched, never acted on")
     command.set_defaults(handler=run)
     args = parser.parse_args(argv)
     try:
