@@ -169,7 +169,7 @@ def run(args):
     packet, validation = record["packet"], load(directory / "validation.json")
     if validation.get("valid") is not True:
         raise RunnerError("The packet did not validate; an attempt could not be judged")
-    name = args.name or f"{args.worker_model}-{args.worker_reasoning}".replace(".", "-")
+    name = args.name or f"{args.worker_model}-{args.worker_reasoning}".replace(".", "-").replace("/", "-")
     attempt = directory / "attempts" / name
     if attempt.exists():
         raise RunnerError("That attempt exists; choose another --name")

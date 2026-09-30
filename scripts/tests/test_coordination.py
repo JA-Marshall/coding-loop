@@ -687,6 +687,39 @@ print(json.dumps({'payload_type': 'run.terminal.completed', 'payload': {'termina
             state = self.runner(CodexAdapter()).run()
         self.assertEqual((state["phase"], state["reason"]), ("STOPPED", "A Muse worker runs only through the isolated adapter"))
 
+    def test_a_meta_model_runs_in_codex_against_metas_api_and_the_key_does_not_outlive_the_call(self):
+        from scripts.coordination.isolated import IsolatedAdapter
+        context = self.fake_claude_cli(self.CLAUDE_PATCH, claude_worker=False)
+        (self.home / "bin" / "codex").write_text("#!" + sys.executable + "\n" + r"""import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+assert '--strict-config' in args and '--ephemeral' in args
+assert args[args.index('--model') + 1] == 'muse-spark-1.3-contributor', 'the provider prefix is not a model name'
+home = Path(os.environ['CODEX_HOME'])
+config = (home / 'config.toml').read_text()
+assert config.startswith('model_provider = "meta"\n') and 'base_url = "https://api.meta.ai/v1"' in config
+assert 'experimental_bearer_token = "fixture-key"' in config and '[permissions.runner.network]\nenabled = false' in config
+assert not (home / 'auth.json').exists(), 'the ChatGPT login is not sent along'
+assert 'PACKET:' in sys.stdin.read()
+Path(args[args.index('-o') + 1]).write_text(json.dumps({'patch': PATCH_VALUE, 'summary': 'fake Muse patch in Codex'}))
+print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 100, 'output_tokens': 30}}))
+""".replace("PATCH_VALUE", repr(PATCH)))
+        login = self.home / "xdg" / "muse"
+        login.mkdir(parents=True)
+        (login / "auth.json").write_text(json.dumps({"providers": {"meta": {"api_key": "fixture-key"}}}))
+        auth = self.home / "codex-auth"
+        auth.mkdir()
+        (auth / "auth.json").write_text("{}")
+        self.packet.update(worker_model="meta/muse-spark-1.3-contributor", worker_reasoning="medium")
+        with patch.dict(os.environ, dict(context.values, XDG_CONFIG_HOME=str(self.home / "xdg"))):
+            state = self.runner(IsolatedAdapter(auth)).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual(state["pair"]["worker"], "codex:meta/muse-spark-1.3-contributor:medium")
+        self.assertEqual(state["usage"][0]["reported"], [{"input_tokens": 100, "output_tokens": 30}])
+        left = (self.run_dir / "codex-1" / "config.toml").read_text()
+        self.assertNotIn("fixture-key", left)
+        self.assertIn('model_provider = "meta"', left)
+
     def test_advisory_review_must_be_boolean(self):
         self.packet["advisory_review"] = "yes"
         with self.assertRaises(RunnerError):

@@ -95,11 +95,46 @@ def muse_config_text(source, home, binary):
             '[permissions.muse.network]\nenabled = true\n')
 
 
-def muse_home(destination, source, binary, prompt, schema):
-    """A runtime of its own for one Muse call: no memories, rules or sessions from the owner's home."""
+def muse_login():
+    """The Muse Code login file, which holds the Meta API key both Muse routes are billed to."""
     login = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "muse" / "auth.json"
     if not login.is_file():
         raise RunnerError("Muse login unavailable for isolated runtime")
+    return login
+
+
+META_PREFIX = "meta/"
+META_PROVIDER = ('[model_providers.meta]\nname = "Meta"\nbase_url = "https://api.meta.ai/v1"\n'
+                 'wire_api = "responses"\nexperimental_bearer_token = ')
+
+
+def meta_provider(home):
+    """Point one Codex runtime at Meta's API, for a Muse model run in Codex's harness (worker model "meta/<id>").
+
+    The key goes in the runtime's private config, which the sandboxed commands cannot read, and is
+    taken out again by scrub_meta_provider when the call ends. The ChatGPT login is not needed and
+    is not left beside a request to another provider.
+    """
+    try:
+        key = json.loads(muse_login().read_text())["providers"]["meta"]["api_key"]
+    except (ValueError, KeyError, TypeError):
+        key = None
+    if not isinstance(key, str) or not key:
+        raise RunnerError("Muse login holds no Meta API key")
+    config = home / "config.toml"
+    config.write_text('model_provider = "meta"\n' + config.read_text() + META_PROVIDER + json.dumps(key) + "\n")
+    (home / "auth.json").unlink()
+
+
+def scrub_meta_provider(home):
+    config = home / "config.toml"
+    config.write_text("".join(line for line in config.read_text().splitlines(keepends=True)
+                              if not line.startswith("experimental_bearer_token")))
+
+
+def muse_home(destination, source, binary, prompt, schema):
+    """A runtime of its own for one Muse call: no memories, rules or sessions from the owner's home."""
+    login = muse_login()
     home = destination / "home"
     config = home / ".config" / "muse"
     config.mkdir(mode=0o700, parents=True)
@@ -201,11 +236,18 @@ class IsolatedAdapter:
                                effort=REVIEW_MODEL[1], schema=REVIEW_SCHEMA)
         home = runtime_home(runner.run_dir / f"codex-{number}", source, self.auth_home)
         model, effort = codex_model(packet, role)
+        meta = model.startswith(META_PREFIX)
+        if meta:
+            meta_provider(home)
         argv = ["env", "CODEX_HOME=" + str(home), "codex", "exec", "--strict-config",
-                "--ephemeral", "--json", "--cd", str(source), "--model", model,
+                "--ephemeral", "--json", "--cd", str(source), "--model", model[len(META_PREFIX):] if meta else model,
                 "-c", 'model_reasoning_effort="' + effort + '"',
                 "--output-schema", str(schema), "-o", str(output), "-"]
-        code = runner.command(argv, packet["call_timeout"], f"model-{number}", prompt.encode())
+        try:
+            code = runner.command(argv, packet["call_timeout"], f"model-{number}", prompt.encode())
+        finally:
+            if meta:
+                scrub_meta_provider(home)
         usage = []
         for line in (runner.run_dir / f"model-{number}.log").read_text(errors="replace").splitlines():
             try:
