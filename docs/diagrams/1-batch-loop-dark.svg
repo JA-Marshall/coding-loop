@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 552" role="img" aria-label="The batch supervisor takes each packet from a frozen manifest through PREPARE, ROUTE, RUN and COMMIT on the local machine, then PUSH, PR, CI and MERGE through the GitHub API, and loops back to PREPARE for the next packet from a refreshed origin/main. RUN runs the packet&#x27;s checks before any review, and CI is a second gate on the pushed head. ROUTE is planned: it predicts the odds of a one-pass merge and picks the model pair, or a split, before RUN. State is checkpointed after every phase, and any failed gate or spent budget stops the queue with its evidence kept.">
+<style>text{font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:11.5px;fill:#E9E7E1}.mono{font-family:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}.b{font-weight:600}.mu{fill:#A4A7B0}.c{text-anchor:middle}.e{text-anchor:end}.s9{font-size:9.5px;letter-spacing:.05em}.s10{font-size:10.5px}.s11{font-size:11px}.s12{font-size:12.5px}.s13{font-size:13px}.s15{font-size:15px}.ca{fill:#F0BC74}.cg{fill:#9CC3EE}.cs{fill:#F0A29B}.cr{fill:#C6B4F2}</style>
+<defs><marker id="head-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#E9E7E1"/></marker><marker id="head-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#DD7168"/></marker><marker id="head-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#A48AE3"/></marker></defs>
+<rect width="960" height="552" rx="12" fill="#15171C"/>
+<rect x="24" y="54" width="204" height="46" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<path d="M126 100V129" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="24" y="130" width="204" height="70" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<rect x="260" y="130" width="204" height="70" rx="6" fill="#2A2142" stroke="#A48AE3" stroke-width="1.75"/>
+<rect x="394" y="141" width="60" height="17" rx="8.5" fill="#15171C" stroke="#A48AE3" stroke-width="1"/>
+<rect x="496" y="130" width="204" height="70" rx="6" fill="#33260F" stroke="#D9983F" stroke-width="1.75"/>
+<rect x="732" y="130" width="204" height="70" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<path d="M228 165H259" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M464 165H495" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M700 165H731" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="12" y="262" width="936" height="110" rx="10" fill="#16273B" stroke="#6CA0DC" stroke-width="1.25" stroke-dasharray="5 4"/>
+<path d="M834 200V289" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="732" y="290" width="204" height="70" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<rect x="496" y="290" width="204" height="70" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<rect x="260" y="290" width="204" height="70" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<rect x="24" y="290" width="204" height="70" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<path d="M260 325H229" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M496 325H465" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M732 325H701" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M126 290V201" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M126 360V403" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="24" y="404" width="204" height="58" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<path d="M421 372V403" fill="none" stroke="#E9E7E1" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="3 4"/>
+<rect x="260" y="404" width="322" height="88" rx="6" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<path d="M700 372V403" fill="none" stroke="#DD7168" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="3 4" marker-end="url(#head-s)"/>
+<rect x="614" y="404" width="322" height="100" rx="6" fill="#3A1B19" stroke="#DD7168" stroke-width="1.75"/>
+<rect x="24" y="520" width="12" height="12" rx="3" fill="#33260F" stroke="#D9983F" stroke-width="1.25"/>
+<rect x="302.79999999999995" y="520" width="12" height="12" rx="3" fill="#1E2128" stroke="#474B57" stroke-width="1.25"/>
+<rect x="407.99999999999994" y="520" width="12" height="12" rx="3" fill="#16273B" stroke="#6CA0DC" stroke-width="1.25"/>
+<rect x="501.99999999999994" y="520" width="12" height="12" rx="3" fill="#3A1B19" stroke="#DD7168" stroke-width="1.25"/>
+<rect x="562.4" y="520" width="12" height="12" rx="3" fill="#2A2142" stroke="#A48AE3" stroke-width="1.25"/>
+<text x="24" y="34" class="b s15">Outer loop: one pass per packet</text>
+<text x="936" y="34" class="e mu mono s11">batch.py</text>
+<text x="38" y="73" class="b s12">frozen manifest</text>
+<text x="38" y="89" class="mu">4 packets, hashed at the start</text>
+<text x="136" y="119" class="mu s11">packet i</text>
+<text x="38" y="154" class="mono b s13">PREPARE</text>
+<text x="38" y="173" class="mu">plan file DRAFT → READY →</text>
+<text x="38" y="188" class="mu">IN_PROGRESS, validated</text>
+<text x="274" y="154" class="mono b s13 cr">ROUTE</text>
+<text x="274" y="173" class="mu">predict one-pass odds, pick</text>
+<text x="274" y="188" class="mu">a pair or split · figure 4</text>
+<text x="424.0" y="153" class="c b s9 cr">PLANNED</text>
+<text x="510" y="154" class="mono b s13 ca">RUN</text>
+<text x="510" y="173" class="mu">runner.py: patch, checks,</text>
+<text x="510" y="188" class="mu">then review · figure 2</text>
+<text x="746" y="154" class="mono b s13">COMMIT</text>
+<text x="746" y="173" class="mu">plan marked COMPLETE,</text>
+<text x="746" y="188" class="mu">ACTIVE cleared</text>
+<text x="260" y="281" class="b cg">GitHub API, no model tokens</text>
+<text x="746" y="314" class="mono b s13">PUSH</text>
+<text x="746" y="333" class="mu">exact ref, never forced</text>
+<text x="510" y="314" class="mono b s13">PR</text>
+<text x="510" y="333" class="mu">create or reuse the PR</text>
+<text x="274" y="314" class="mono b s13">CI</text>
+<text x="274" y="333" class="mu">a second gate: the required</text>
+<text x="274" y="348" class="mu">check on the pushed head</text>
+<text x="38" y="314" class="mono b s13">MERGE</text>
+<text x="38" y="333" class="mu">API merge of the exact SHA</text>
+<text x="140" y="227" class="s12">next packet: index + 1, on a checkout refreshed</text>
+<text x="140" y="243" class="s12">from origin/main after the verified merge</text>
+<text x="38" y="428" class="mono b s13">COMPLETE</text>
+<text x="38" y="447" class="mu">last packet merged</text>
+<text x="430" y="392" class="mu s10">every transition</text>
+<text x="274" y="426" class="b s12">state.json checkpoint after every phase</text>
+<text x="274" y="446" class="mu">a restart reconciles local writes with the</text>
+<text x="274" y="461" class="mu">remote PR state: never a second writer,</text>
+<text x="274" y="476" class="mu">never a replay of an ambiguous call</text>
+<text x="709" y="392" class="cs s10">any failed gate or spent budget</text>
+<text x="628" y="426" class="b s12 cs">STOPPED, evidence preserved</text>
+<text x="628" y="446" class="cs">STOP file · 8 h deadline · 24 calls</text>
+<text x="628" y="461" class="cs">4M tokens · unknown usage · branch moved</text>
+<text x="628" y="476" class="cs">failed or stale CI · changes requested</text>
+<text x="628" y="491" class="cs">supervisor files changed</text>
+<text x="42" y="530" class="mu s11">model call: the only place tokens are spent</text>
+<text x="320.79999999999995" y="530" class="mu s11">plain Python</text>
+<text x="425.99999999999994" y="530" class="mu s11">GitHub API</text>
+<text x="520.0" y="530" class="mu s11">stop</text>
+<text x="580.4" y="530" class="mu s11">router: learned from outcomes, no model call of its own</text>
+</svg>
