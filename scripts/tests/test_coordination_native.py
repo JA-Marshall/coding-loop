@@ -222,6 +222,27 @@ class NativeWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "virtual environment"):
             native.python_mounts("/bin/sh", [], self.home / "shims-3")
 
+    def test_an_environment_on_a_system_python_is_replaced_by_its_twin_in_the_container(self):
+        system = self.home / "usr"
+        (system / "bin").mkdir(parents=True)
+        (system / "bin" / "python3.10").write_text("#!/bin/sh\n")
+        (system / "bin" / "python3").symlink_to("python3.10")
+        environment = self.home / "envs" / "on-system"
+        (environment / "bin").mkdir(parents=True)
+        (environment / "pyvenv.cfg").write_text(f"home = {system / 'bin'}\nversion = 3.10.12\n")
+        (environment / "bin" / "python3").symlink_to(system / "bin" / "python3")
+        (environment / "bin" / "python").symlink_to("python3")
+        (environment / "bin" / "pysrc").write_text(f"#!/bin/sh\nexec {environment}/bin/python \"$@\"\n")
+        with patch.object(native, "SYSTEM_DIRS", native.SYSTEM_DIRS + (str(system),)):
+            # A standalone-based environment is used as it is.
+            self.assertEqual(native.worker_python(self.python), self.python)
+            with self.assertRaisesRegex(RunnerError, "build-twin"):
+                native.worker_python(environment / "bin" / "pysrc")
+            twin = self.home / "envs" / "on-system.native"
+            (twin / "bin").mkdir(parents=True)
+            (twin / "bin" / "pysrc").write_text("#!/bin/sh\n")
+            self.assertEqual(native.worker_python(environment / "bin" / "pysrc"), str(twin / "bin" / "pysrc"))
+
     def test_the_models_own_repository_starts_clean_and_keeps_executable_bits(self):
         source, git_dir = self.home / "copy", self.home / "copy.git"
         base = native.make_copy(self.root, source, git_dir)

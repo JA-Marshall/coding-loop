@@ -21,6 +21,11 @@ each CLI's own sandbox, which is therefore off inside it.
 The loop, the hidden checks and the reviewer stay outside, as before. Build the image once:
 
     python3 -m scripts.coordination.native build-image
+
+A packet environment built on a system Python (home = /usr/bin in pyvenv.cfg) cannot be mounted;
+the worker uses its twin instead, built once per environment:
+
+    python3 -m scripts.coordination.native build-twin ~/.local/share/derived-staging/envs/pytest
 """
 from __future__ import annotations
 
@@ -231,6 +236,84 @@ def python_mounts(interpreter, forbidden, shims):
     return mounts, str(interpreter.parent)
 
 
+def twin_path(environment):
+    """Where the worker's twin of an environment built on a system Python lives: beside it, named <name>.native."""
+    environment = Path(environment)
+    return environment.with_name(environment.name + ".native")
+
+
+def worker_python(python):
+    """The interpreter the worker container runs.
+
+    That is the packet's own, unless its virtual environment is built on a system Python (such as
+    /usr/bin/python3), which the container cannot mount without replacing its own /usr. Then it is
+    the same path inside the environment's twin: the same Python version installed under the home
+    directory, with the same packages (build-twin). The hidden checks still run with the packet's own.
+    """
+    path = Path(python).absolute()
+    environment = next((p for p in path.parents if (p / "pyvenv.cfg").is_file()), None)
+    if environment is None or not (environment / "bin" / "python").exists():
+        return str(path)
+    base = link_chain(environment / "bin" / "python", {})
+    if not any(inside(base, d) for d in SYSTEM_DIRS):
+        return str(path)
+    twin = twin_path(environment) / path.relative_to(environment)
+    if not twin.is_file():
+        raise RunnerError(f"The packet environment {environment} is built on a system Python; build its twin with "
+                          f"python3 -m scripts.coordination.native build-twin {environment}")
+    return str(twin)
+
+
+UNOWNED = """
+import importlib.metadata as md, os, sys
+prefix = sys.prefix
+site = next(p for p in sys.path if p.startswith(prefix) and p.endswith("site-packages"))
+owned = {str(f).split("/")[0] for d in md.distributions() for f in d.files or []}
+for name in sorted(os.listdir(site)):
+    if name not in owned and name != "__pycache__":
+        print(os.path.relpath(os.path.join(site, name), prefix))
+"""
+
+
+def build_twin(environment):
+    """Make <environment>.native: the same Python version from uv, the same packages, and wrapper scripts such as
+    pysrc with the environment's path changed to the twin's. Refuses to replace an existing twin."""
+    environment = Path(environment).absolute()
+    twin = twin_path(environment)
+    if twin.exists():
+        raise RunnerError(f"{twin} already exists; remove it first to rebuild")
+    config = dict(line.split(" = ", 1) for line in (environment / "pyvenv.cfg").read_text().splitlines() if " = " in line)
+    version = config.get("version") or config.get("version_info")
+    if not version:
+        raise RunnerError(f"No Python version in {environment / 'pyvenv.cfg'}")
+    freeze = subprocess.run([str(environment / "bin" / "python"), "-m", "pip", "freeze"],
+                            capture_output=True, text=True, check=True).stdout
+    for argv in (["uv", "python", "install", version],
+                 ["uv", "venv", "--seed", "--python-preference", "only-managed", "--python", version, str(twin)]):
+        subprocess.run(argv, check=True)
+    requirements = twin / "twin-requirements.txt"
+    requirements.write_text(freeze)
+    subprocess.run(["uv", "pip", "install", "--python", str(twin / "bin" / "python"), "-r", str(requirements)], check=True)
+    # Files added to site-packages by hand, such as a .pth shim, belong to no package and are not in the freeze.
+    unowned = subprocess.run([str(environment / "bin" / "python"), "-c", UNOWNED], capture_output=True, text=True, check=True).stdout
+    for relative in unowned.splitlines():
+        source, target = environment / relative, twin / relative
+        if not target.parent.is_dir():
+            raise RunnerError(f"The twin has no {target.parent}; is it the same Python version?")
+        (shutil.copytree if source.is_dir() else shutil.copy2)(source, target)
+    for script in (environment / "bin").iterdir():
+        if script.is_symlink() or not script.is_file() or (twin / "bin" / script.name).exists():
+            continue
+        text = script.read_bytes()
+        if text.startswith(b"#!") and str(environment).encode() in text:
+            copy = twin / "bin" / script.name
+            copy.write_bytes(text.replace(str(environment).encode(), str(twin).encode()))
+            copy.chmod(script.stat().st_mode & 0o777)
+    if worker_python(environment / "bin" / "python") != str(twin / "bin" / "python"):
+        raise RunnerError(f"{twin} was built but is not used; is {environment} really on a system Python?")
+    return str(twin)
+
+
 def login_root():
     """A private per-user directory in memory for per-call login copies: nothing is left on disk, even after a crash."""
     base = Path("/dev/shm") if Path("/dev/shm").is_dir() else None
@@ -409,6 +492,7 @@ def native_worker(runner, feedback, auth_home, python):
     source, private = runner.run_dir / f"source-{number}", runner.run_dir / f"native-{number}"
     private.mkdir(mode=0o700)
     base = make_copy(runner.root, source, private / "base.git")
+    python = worker_python(python)
     prompt = (Path(__file__).with_name("worker-native.md").read_text()
               + WORKER_PROMPT.format(work=WORK, python=python)
               + "\nPACKET:\n" + canonical(dict(shown_packet(runner.packet), checkout=WORK))
@@ -512,9 +596,12 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("build-image", help=f"build {IMAGE} from {IMAGE_DIR}")
     commands.add_parser("egress", help="start the worker network and its provider-only proxy, if not running")
+    twin = commands.add_parser("build-twin", help="build the worker's twin of an environment made on a system Python")
+    twin.add_argument("environment", type=Path)
     args = parser.parse_args(argv)
     try:
-        print(build_image() if args.command == "build-image" else ensure_egress())
+        print(build_image() if args.command == "build-image" else build_twin(args.environment)
+              if args.command == "build-twin" else ensure_egress())
     except RunnerError as exc:
         print(exc, file=sys.stderr)
         return 2
