@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 
-REVIEW_KEYS = {"candidate", "covered_files", "acceptance", "findings"}
+REVIEW_KEYS = {"candidate", "covered_files", "findings"}  # older reviews also carry "acceptance"
 
 
 def load_json(path):
@@ -31,7 +31,7 @@ def review_calls(run_dir):
     for result_path in sorted(run_dir.glob("result-*.json")):
         stem = result_path.stem.split("-", 1)[1]
         result = load_json(result_path)
-        if stem.isdigit() and isinstance(result, dict) and set(result) == REVIEW_KEYS:
+        if stem.isdigit() and isinstance(result, dict) and set(result) - {"acceptance"} == REVIEW_KEYS:
             yield int(stem), result
 
 

@@ -13,7 +13,7 @@ import unittest
 from scripts.coordination.hooks import respond
 from scripts.coordination.runner import (
     CodexAdapter, PatchFormatError, Runner, RunnerError, apply_patch, authorize_live, checkout_lock,
-    fingerprint, git, main, reviewer_model, save_json, validate_packet,
+    REVIEW_SCHEMA, fingerprint, git, main, reviewer_model, save_json, validate_packet,
 )
 
 
@@ -364,21 +364,31 @@ class RunnerTests(unittest.TestCase):
                 if role == "reviewer":
                     seen.append(json.loads(feedback))
                     if len(seen) <= times:
-                        result["acceptance"] = []
+                        result["covered_files"] = []
                 return result
             return route
         state = self.runner(forgetful(1)).run()
         self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
         self.assertEqual((state["review_retries"], state["calls"]), (1, 3))
         self.assertNotIn("rejected_answer", seen[0])
-        self.assertIn("acceptance items differ", seen[1]["rejected_answer"])
+        self.assertIn("changed files not covered: sample.txt", seen[1]["rejected_answer"])
         self.assertEqual(seen[1]["diff"], seen[0]["diff"])
         seen.clear()
         self.run_dir = self.home / "run-2"
         git(self.root, "checkout", "--", ".")
         state = self.runner(forgetful(2)).run()
         self.assertEqual((state["phase"], state["stop_category"]), ("STOPPED", "harness_failure"))
-        self.assertIn("acceptance items differ", state["reason"])
+        self.assertIn("changed files not covered", state["reason"])
+
+    def test_a_review_need_not_repeat_the_acceptance_items(self):
+        adapter = Adapter()
+        def route(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "reviewer":
+                result.pop("acceptance", None)
+            return result
+        self.assertEqual(self.runner(route).run()["phase"], "LOCAL_REVIEWED")
+        self.assertNotIn("acceptance", REVIEW_SCHEMA["required"])
 
     def test_review_stale_hash_and_findings_stop(self):
         self.packet["max_corrections"] = 0

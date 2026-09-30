@@ -851,8 +851,8 @@ class Runner:
                                 raise
                             self.checkpoint(review_retries=self.state.get("review_retries", 0) + 1)
                             result = self.model("reviewer", canonical(dict(json.loads(evidence), rejected_answer=(
-                                str(exc) + ". Answer again for the same candidate: covered_files lists every file in "
-                                "files, acceptance repeats the packet's acceptance items exactly and in order."))))
+                                str(exc) + ". Answer again for the same candidate, with covered_files listing "
+                                "every file in files."))))
                             self.check_review(result, names)
                         self.checkpoint(review=result)
                         # Only the primary reviewer's blocking findings cost a correction round;
@@ -928,12 +928,12 @@ class Runner:
         self.checkpoint(logged=True)
 
     def check_review(self, result, names):
-        """A review must answer for this candidate, every changed file and every acceptance item.
+        """A review must answer for this candidate and every changed file.
 
         Covering more than the changed files is allowed when the extra files are owned: a reviewer
         that reads the packet may list an owned file the worker left alone."""
         problem = None
-        if not isinstance(result, dict) or set(result) != {"candidate", "covered_files", "acceptance", "findings"}:
+        if not isinstance(result, dict) or set(result) - {"acceptance"} != REVIEW_FIELDS:
             problem = "wrong fields"
         elif result["candidate"] != self.state["candidate"]:
             problem = "stale candidate"
@@ -945,8 +945,6 @@ class Runner:
         elif not set(result["covered_files"]) - set(names) <= set(self.packet["owned_files"]):
             problem = "covers files outside the packet: " + ", ".join(
                 sorted(set(result["covered_files"]) - set(names) - set(self.packet["owned_files"])))
-        elif result["acceptance"] != self.packet["acceptance"]:
-            problem = "acceptance items differ from the packet's"
         elif not isinstance(result["findings"], list) or not all(valid_finding(v) for v in result["findings"]):
             problem = "invalid findings"
         if problem:
@@ -1004,11 +1002,14 @@ FINDING_SCHEMA = {"type": "object", "properties": {
     "file": {"type": "string"}, "severity": {"type": "string", "enum": list(SEVERITIES)},
     "summary": {"type": "string"}, "failure_scenario": {"type": "string"}},
     "required": ["file", "severity", "summary", "failure_scenario"], "additionalProperties": False}
+# The review no longer repeats the acceptance items: the loop knows them, and the candidate hash binds the
+# review to the code. Packets' acceptance items can be noisy text, and a reviewer that left one out stopped
+# an attempt whose code had passed the hidden tests. Older results that carry "acceptance" still validate.
 REVIEW_SCHEMA = {"type": "object", "properties": {"candidate": {"type": "string"},
                  "covered_files": {"type": "array", "items": {"type": "string"}},
-                 "acceptance": {"type": "array", "items": {"type": "string"}},
                  "findings": {"type": "array", "items": FINDING_SCHEMA}},
-                 "required": ["candidate", "covered_files", "acceptance", "findings"], "additionalProperties": False}
+                 "required": ["candidate", "covered_files", "findings"], "additionalProperties": False}
+REVIEW_FIELDS = {"candidate", "covered_files", "findings"}
 
 
 def valid_finding(finding):
