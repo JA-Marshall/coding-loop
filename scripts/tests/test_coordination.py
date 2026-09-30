@@ -886,7 +886,7 @@ agent_strategy: SEQUENTIAL_WORKER
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
     def test_finished_run_appends_one_line_and_resume_does_not_repeat_it(self):
-        decision = {"policy": "random", "action": "cheap", "probability": 0.5, "explore": True, "parent_packet": None}
+        decision = {"policy": "random", "action": "cheap", "probability": 0.5, "exploration": True, "parent_packet": None}
         state = Runner(self.packet, self.run_dir, Adapter(), decision=decision).run()
         (line,) = self.log_lines()
         self.assertEqual(line["attempt_id"], state["attempt_id"])
@@ -1012,7 +1012,7 @@ agent_strategy: SEQUENTIAL_WORKER
         self.assertEqual(self.log_lines()[-1]["corrections_log"], [])
 
     def test_decision_is_stored_untouched_and_a_launcher_can_name_the_log(self):
-        decision = {"policy": "p", "action": "split", "probability": 0.25, "explore": False, "parent_packet": "big-1"}
+        decision = {"policy": "p", "action": "split", "probability": 0.25, "exploration": False, "parent_packet": "big-1"}
         target = self.home / "elsewhere" / "log.jsonl"
         state = Runner(self.packet, self.run_dir, Adapter(), decision=decision, attempt_log=target).run()
         self.assertEqual(state["decision"], decision)
