@@ -355,6 +355,31 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(state["phase"], "STOPPED")
         self.assertIn("covers files outside the packet: elsewhere.txt", state["reason"])
 
+    def test_a_malformed_review_is_asked_for_again_once_with_what_was_wrong(self):
+        adapter = Adapter()
+        seen = []
+        def forgetful(times):
+            def route(runner, role, feedback):
+                result = adapter(runner, role, feedback)
+                if role == "reviewer":
+                    seen.append(json.loads(feedback))
+                    if len(seen) <= times:
+                        result["acceptance"] = []
+                return result
+            return route
+        state = self.runner(forgetful(1)).run()
+        self.assertEqual(state["phase"], "LOCAL_REVIEWED", state)
+        self.assertEqual((state["review_retries"], state["calls"]), (1, 3))
+        self.assertNotIn("rejected_answer", seen[0])
+        self.assertIn("acceptance items differ", seen[1]["rejected_answer"])
+        self.assertEqual(seen[1]["diff"], seen[0]["diff"])
+        seen.clear()
+        self.run_dir = self.home / "run-2"
+        git(self.root, "checkout", "--", ".")
+        state = self.runner(forgetful(2)).run()
+        self.assertEqual((state["phase"], state["stop_category"]), ("STOPPED", "harness_failure"))
+        self.assertIn("acceptance items differ", state["reason"])
+
     def test_review_stale_hash_and_findings_stop(self):
         self.packet["max_corrections"] = 0
         state = self.runner(Adapter([finding()])).run()

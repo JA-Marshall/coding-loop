@@ -164,6 +164,8 @@ def fingerprint(root):
 # Patches that git cannot apply get this many corrections outside max_corrections: models
 # trained on other patch formats need a round or two to adapt. max_calls still caps them.
 FORMAT_RETRIES = 2
+# Malformed reviews asked for again per attempt; a second malformed answer to the same review stops it.
+REVIEW_RETRIES = 2
 MAX_CHECK_CORRECTIONS = 10
 LIMITS = {"max_corrections": (2, 0, 2), "max_calls": (6, 1, 7),
           "call_timeout": (2700, 1, 2700), "total_timeout": (28800, 1, 28800)}
@@ -840,7 +842,18 @@ class Runner:
                         evidence = canonical({"diff": diff, "files": names, "candidate": self.state["candidate"],
                                               "previous_findings": previous})
                         result = self.model("reviewer", evidence)
-                        self.check_review(result, names)
+                        try:
+                            self.check_review(result, names)
+                        except RunnerError as exc:
+                            # A malformed answer is asked for again, once, with what was wrong, as a
+                            # broken patch is; it costs a call. Only a repeat stops the attempt.
+                            if self.state.get("review_retries", 0) >= REVIEW_RETRIES:
+                                raise
+                            self.checkpoint(review_retries=self.state.get("review_retries", 0) + 1)
+                            result = self.model("reviewer", canonical(dict(json.loads(evidence), rejected_answer=(
+                                str(exc) + ". Answer again for the same candidate: covered_files lists every file in "
+                                "files, acceptance repeats the packet's acceptance items exactly and in order."))))
+                            self.check_review(result, names)
                         self.checkpoint(review=result)
                         # Only the primary reviewer's blocking findings cost a correction round;
                         # the rest travel with the candidate as reviewer notes for the owner.
@@ -892,7 +905,8 @@ class Runner:
                 "stop_category": state.get("stop_category"), "reason": reason, "timeline": state.get("timeline", []),
                 "usage": state.get("usage", []), "checks": checks,
                 "blocking_findings": len(blocking_findings(state.get("review") or {})), "loop_version": loop_version,
-                "patch_repairs": state.get("patch_repairs", []), "native_calls": state.get("native_calls", [])}
+                "patch_repairs": state.get("patch_repairs", []), "native_calls": state.get("native_calls", []),
+                "review_retries": state.get("review_retries", 0)}
 
     def log_attempt(self):
         """Append the attempt's one line. A crash between the append and the checkpoint below repeats
