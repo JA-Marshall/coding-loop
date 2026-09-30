@@ -517,7 +517,7 @@ def apply_git_patch(root, patch, owned):
             raise RunnerError("Unsupported patch entry")
         name = relative_file(parts[2].decode("utf-8"))
         if name not in owned:
-            raise RunnerError("Patch outside owned files: " + name)
+            raise RunnerError("Patch outside owned files: " + name, category="scope_violation")
         path = root / name
         if any(parent.is_symlink() for parent in (path, *path.parents)):
             raise RunnerError("Patch path follows a symlink")
