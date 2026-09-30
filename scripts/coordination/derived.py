@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -58,14 +59,30 @@ def derived_packet(path):
     return packet
 
 
+def tracked_symlinks(root, commit):
+    """Paths the commit stores as symbolic links."""
+    entries = git(root, "ls-tree", "-r", "-z", commit).split(b"\0")
+    return sorted(os.fsdecode(entry.split(b"\t", 1)[1]) for entry in entries if entry.startswith(b"120000 "))
+
+
 def clone_at_base(source, destination, packet):
-    """A checkout of its own at the base commit, on the packet's branch, with the public repository as origin."""
+    """A checkout of its own at the base commit, on the packet's branch, with the public repository as origin.
+
+    The loop refuses a candidate that holds a symbolic link. Links the base commit tracks are therefore
+    left out of the working tree (a sparse checkout): HEAD is still the base commit, the tree is clean,
+    and a link the worker adds is refused as before. Returns the paths left out.
+    """
     git(source, "cat-file", "-e", packet["base_sha"] + "^{commit}")
     subprocess.run(["git", "clone", "-q", "--no-checkout", "--local", str(source), str(destination)],
                    check=True, capture_output=True, timeout=600)
     git(destination, "checkout", "-q", "-b", packet["branch"], packet["base_sha"])
+    links = tracked_symlinks(destination, packet["base_sha"])
+    if links:
+        git(destination, "sparse-checkout", "set", "--no-cone", "/*",
+            *("!/" + re.sub(r"([*?\[\\])", r"\\\1", name) for name in links))
     if isinstance(packet.get("repo"), str) and packet["repo"]:
         git(destination, "remote", "set-url", "origin", packet["repo"])
+    return links
 
 
 def prepare(args):
@@ -83,10 +100,12 @@ def prepare(args):
         target = directory / "hidden" / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(git(source, "show", f"{ref}:{name}"))
-    clone_at_base(source, directory / "checkout", packet)
-    save_json(directory / "derived.json", {"packet": packet, "source": str(source)})
+    links = clone_at_base(source, directory / "checkout", packet)
+    save_json(directory / "derived.json", {"packet": packet, "source": str(source), "omitted_symlinks": links})
     print(f"Prepared {packet['id']} in {directory}: checkout at {packet['base_sha'][:12]}, "
-          f"{len(packet['hidden_checks']['files'])} hidden check file(s). Validate it next.")
+          f"{len(packet['hidden_checks']['files'])} hidden check file(s)"
+          + (f", {len(links)} tracked symbolic link(s) left out of the working tree" if links else "")
+          + ". Validate it next.")
     return 0
 
 

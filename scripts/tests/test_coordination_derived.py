@@ -10,6 +10,7 @@ from unittest.mock import patch
 import unittest
 
 from scripts.coordination import derived
+from scripts.coordination.isolated import snapshot
 from scripts.coordination.runner import Runner, RunnerError, fingerprint, git, hidden_overlay, shown_packet, validate_packet
 
 PRODUCT = "def double(value):\n    return value\n"
@@ -234,6 +235,42 @@ class DerivedTests(unittest.TestCase):
         # The candidate is in the attempt's checkout; the validation checkout is untouched.
         self.assertEqual((attempt / "checkout" / "product.py").read_text(), FIXED)
         self.assertEqual((self.directory / "checkout" / "product.py").read_text(), PRODUCT)
+
+    def test_symbolic_links_tracked_at_base_are_left_out_so_the_loop_accepts_the_checkout(self):
+        # Rebuild the public repository with two tracked links at its base commit: one to a file, one to a directory.
+        git(self.source, "checkout", "-q", "-B", "main", self.base)
+        os.symlink("product.py", self.source / "ALIAS.py")
+        os.symlink("../tests", self.source / "tests" / "again")
+        git(self.source, "add", "-A")
+        git(self.source, "commit", "-m", "base with links")
+        base = git(self.source, "rev-parse", "HEAD").decode().strip()
+        (self.source / "product.py").write_text(FIXED)
+        (self.source / "tests" / "test_product.py").write_text(NEW_TEST)
+        git(self.source, "commit", "-am", "merged fix")
+        merge = git(self.source, "rev-parse", "HEAD").decode().strip()
+        self.packet_file.write_text(json.dumps(dict(
+            self.derived, base_sha=base, merge_sha=merge, hidden_checks={"ref": merge, "files": ["tests/test_product.py"]})))
+        root = self.prepared()
+        self.assertEqual(json.loads((self.directory / "derived.json").read_text())["omitted_symlinks"],
+                         ["ALIAS.py", "tests/again"])
+        self.assertFalse(os.path.lexists(root / "ALIAS.py") or os.path.lexists(root / "tests" / "again"))
+        self.assertEqual((git(root, "rev-parse", "HEAD").decode().strip(), git(root, "status", "--porcelain")), (base, b""))
+        fingerprint(root)
+        snapshot(root, self.home / "snapshot")
+        self.assertEqual(sorted(path.name for path in (self.home / "snapshot").iterdir() if path.name != ".git"),
+                         ["product.py", "tests"])
+        self.assertEqual(self.call("validate", "--directory", str(self.directory), "--python", sys.executable)[0], 0)
+        adapter = Worker()
+        with patch.object(derived, "IsolatedAdapter", lambda auth_home: adapter):
+            code, text = self.call("run", "--directory", str(self.directory), "--worker-model", "gpt-5.6-terra",
+                                   "--worker-reasoning", "medium", "--auth-home", str(self.home), "--live")
+        self.assertEqual(code, 0, text)
+        attempt = self.directory / "attempts" / "gpt-5-6-terra-medium" / "checkout"
+        self.assertEqual(((attempt / "product.py").read_text(), os.path.lexists(attempt / "ALIAS.py")), (FIXED, False))
+        # A link the worker adds is still refused.
+        os.symlink("product.py", attempt / "added.py")
+        with self.assertRaisesRegex(RunnerError, "Symlinks require manual handling"):
+            fingerprint(attempt)
 
 
 if __name__ == "__main__":

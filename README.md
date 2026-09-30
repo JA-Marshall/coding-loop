@@ -134,6 +134,8 @@ python3 -m scripts.coordination.derived run --directory /private/derived/some-pr
 - `validate` makes no model call. The checks must fail at the base commit and pass once the merged change to the owned files is applied; a packet that does neither cannot judge an attempt. `--python` is an interpreter that already holds the repository's test dependencies for that base commit, and it replaces a leading `python` in each check command.
 - `run` makes one attempt in a fresh checkout under `attempts/`: one worker and the primary reviewer, with triage and the advisory review off. Every model call reads an isolated source snapshot without Git history, so the merged change cannot be read from the clone.
 
+The loop refuses a candidate that holds a symbolic link. A public repository may track some, so `prepare` and `run` leave the links the base commit tracks out of the working tree with a sparse checkout, and `prepare` lists them in `derived.json` as `omitted_symlinks`. `HEAD` is still the base commit and a link the worker adds is refused as before. The worker does not see those paths, and a check that needs one of them will fail validation.
+
 When a check fails, the worker's correction is given an excerpt of the check log, as it is for any packet. For a derived packet that excerpt comes from the hidden tests, so a corrected attempt has seen part of them; a one-pass attempt has not.
 
 ## Running a batch
