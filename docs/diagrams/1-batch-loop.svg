@@ -1,83 +1,84 @@
-<svg xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui, sans-serif" viewBox="0 0 960 350" role="img" aria-label="The batch supervisor moves each packet through PREPARE, RUN, COMMIT, PUSH, PR, CI and MERGE, then loops back to PREPARE for the next packet from refreshed origin/main, checkpointing state after every phase and stopping on any budget or gate failure.">
-    <defs>
-      <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1F2126"/></marker>
-      <marker id="a1s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B5433A"/></marker>
-    </defs><rect x="0" y="0" width="960" height="350" fill="#ECEAE3"/>
-    <g fill="none" stroke="#1F2126" stroke-width="1.5">
-      <!-- GitHub region -->
-      <rect x="370" y="88" width="490" height="76" rx="6" stroke="#3D6FA8" stroke-dasharray="5 4" fill="#E1EAF5"/>
-      <!-- manifest -->
-      <rect x="20" y="20" width="220" height="40" rx="4" fill="#F5F3EE"/>
-      <!-- phases -->
-      <rect x="20" y="104" width="100" height="44" rx="4" fill="#F5F3EE"/>
-      <rect x="140" y="104" width="100" height="44" rx="4" fill="#F7E7CF" stroke="#B86E14" stroke-width="2"/>
-      <rect x="260" y="104" width="100" height="44" rx="4" fill="#F5F3EE"/>
-      <rect x="380" y="104" width="100" height="44" rx="4" fill="#F5F3EE"/>
-      <rect x="500" y="104" width="100" height="44" rx="4" fill="#F5F3EE"/>
-      <rect x="620" y="104" width="100" height="44" rx="4" fill="#F5F3EE"/>
-      <rect x="740" y="104" width="100" height="44" rx="4" fill="#F5F3EE"/>
-      <rect x="870" y="104" width="80" height="44" rx="4" fill="#F5F3EE"/>
-      <!-- checkpoint -->
-      <rect x="20" y="256" width="620" height="40" rx="4" fill="#F5F3EE"/>
-      <!-- stop -->
-      <rect x="660" y="256" width="290" height="74" rx="4" fill="#F6DEDB" stroke="#B5433A"/>
-      <!-- flow arrows -->
-      <path d="M70 60V102" marker-end="url(#a1)"/>
-      <path d="M120 126H138" marker-end="url(#a1)"/>
-      <path d="M240 126H258" marker-end="url(#a1)"/>
-      <path d="M360 126H378" marker-end="url(#a1)"/>
-      <path d="M480 126H498" marker-end="url(#a1)"/>
-      <path d="M600 126H618" marker-end="url(#a1)"/>
-      <path d="M720 126H738" marker-end="url(#a1)"/>
-      <path d="M840 126H868" marker-end="url(#a1)"/>
-      <!-- CI poll self-loop -->
-      <path d="M690 104C690 86 720 86 720 104" marker-end="url(#a1)"/>
-      <!-- loop back -->
-      <path d="M790 148V218H70V150" marker-end="url(#a1)"/>
-      <!-- checkpoint ticks -->
-      <path d="M330 148V254" stroke-dasharray="3 4"/>
-      <!-- stop arrow from loop -->
-      <path d="M430 218V254" stroke="#B5433A" marker-end="url(#a1s)" stroke-dasharray="3 4" opacity="0"/>
-    </g>
-    <g fill="#1F2126" font-size="12">
-      <text x="30" y="37" font-weight="500">manifest from ebay_queue.json</text>
-      <text x="30" y="52" fill="#6B6E76" font-size="11">4 packets, hashed and frozen at start</text>
-      <text x="78" y="86" fill="#6B6E76" font-size="11">packet i</text>
-      <g font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="12" font-weight="500" text-anchor="middle">
-        <text x="70" y="130">PREPARE</text>
-        <text x="190" y="130" fill="#B86E14">RUN</text>
-        <text x="310" y="130">COMMIT</text>
-        <text x="430" y="130">PUSH</text>
-        <text x="550" y="130">PR</text>
-        <text x="670" y="130">CI</text>
-        <text x="790" y="130">MERGE</text>
-        <text x="910" y="130">COMPLETE</text>
-      </g>
-      <text x="380" y="82" fill="#3D6FA8" font-size="11" font-weight="500">GitHub API, no model tokens</text>
-      <text x="705" y="80" fill="#6B6E76" font-size="10">poll ≤30s, ≤1h</text>
-      <g fill="#6B6E76" font-size="10.5" text-anchor="middle">
-        <text x="70" y="166">plan DRAFT → READY</text>
-        <text x="70" y="179">→ IN_PROGRESS, validated</text>
-        <text x="190" y="166">runner.py, figure 2</text>
-        <text x="190" y="179">worker + review calls</text>
-        <text x="310" y="166">plan COMPLETE,</text>
-        <text x="310" y="179">ACTIVE cleared</text>
-        <text x="430" y="182">exact ref, never force</text>
-        <text x="550" y="182">create or reuse PR</text>
-        <text x="670" y="182">required check on head</text>
-        <text x="790" y="182">API merge, exact SHA</text>
-        <text x="910" y="166">last packet</text>
-        <text x="910" y="179">merged</text>
-      </g>
-      <text x="430" y="212" text-anchor="middle" font-size="11">next packet: index + 1, checkout refreshed from origin/main after the verified merge</text>
-      <text x="30" y="273" font-weight="500">state.json checkpoint written after every phase</text>
-      <text x="30" y="288" fill="#6B6E76" font-size="11">restart reconciles scoped local writes and remote PR/merge facts; never a second writer, never a replay of an ambiguous call</text>
-      <text x="338" y="246" fill="#6B6E76" font-size="10">every transition</text>
-      <text x="672" y="274" fill="#B5433A" font-weight="500">STOPPED, evidence preserved</text>
-      <g fill="#B5433A" font-size="10.5">
-        <text x="672" y="291">STOP file · 8h deadline · 24 calls · 4M tokens</text>
-        <text x="672" y="305">failed or stale CI · changes requested · branch moved</text>
-        <text x="672" y="319">supervisor files changed · unknown usage</text>
-      </g>
-    </g>
-  </svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 552" role="img" aria-label="The batch supervisor takes each packet from a frozen manifest through PREPARE, ROUTE, RUN and COMMIT on the local machine, then PUSH, PR, CI and MERGE through the GitHub API, and loops back to PREPARE for the next packet from a refreshed origin/main. RUN runs the packet&#x27;s checks before any review, and CI is a second gate on the pushed head. ROUTE is planned: it predicts the odds of a one-pass merge and picks the model pair, or a split, before RUN. State is checkpointed after every phase, and any failed gate or spent budget stops the queue with its evidence kept.">
+<style>text{font-family:'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;font-size:11.5px;fill:#1F2126}.mono{font-family:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace}.b{font-weight:600}.mu{fill:#5C5F67}.c{text-anchor:middle}.e{text-anchor:end}.s9{font-size:9.5px;letter-spacing:.05em}.s10{font-size:10.5px}.s11{font-size:11px}.s12{font-size:12.5px}.s13{font-size:13px}.s15{font-size:15px}.ca{fill:#7E4706}.cg{fill:#24507F}.cs{fill:#96291F}.cr{fill:#4E3590}</style>
+<defs><marker id="head-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#1F2126"/></marker><marker id="head-s" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#B5433A"/></marker><marker id="head-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0.5L10 5L0 9.5z" fill="#6D4FB0"/></marker></defs>
+<rect width="960" height="552" rx="12" fill="#F3F0E8"/>
+<rect x="24" y="54" width="204" height="46" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<path d="M126 100V129" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="24" y="130" width="204" height="70" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<rect x="260" y="130" width="204" height="70" rx="6" fill="#ECE6F7" stroke="#6D4FB0" stroke-width="1.75"/>
+<rect x="394" y="141" width="60" height="17" rx="8.5" fill="#F3F0E8" stroke="#6D4FB0" stroke-width="1"/>
+<rect x="496" y="130" width="204" height="70" rx="6" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.75"/>
+<rect x="732" y="130" width="204" height="70" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<path d="M228 165H259" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M464 165H495" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M700 165H731" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="12" y="262" width="936" height="110" rx="10" fill="#E4ECF6" stroke="#3D6FA8" stroke-width="1.25" stroke-dasharray="5 4"/>
+<path d="M834 200V289" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="732" y="290" width="204" height="70" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<rect x="496" y="290" width="204" height="70" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<rect x="260" y="290" width="204" height="70" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<rect x="24" y="290" width="204" height="70" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<path d="M260 325H229" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M496 325H465" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M732 325H701" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M126 290V201" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<path d="M126 360V403" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" marker-end="url(#head-ink)"/>
+<rect x="24" y="404" width="204" height="58" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<path d="M421 372V403" fill="none" stroke="#1F2126" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="3 4"/>
+<rect x="260" y="404" width="322" height="88" rx="6" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<path d="M700 372V403" fill="none" stroke="#B5433A" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="3 4" marker-end="url(#head-s)"/>
+<rect x="614" y="404" width="322" height="100" rx="6" fill="#F8E1DD" stroke="#B5433A" stroke-width="1.75"/>
+<rect x="24" y="520" width="12" height="12" rx="3" fill="#F9E8CB" stroke="#B86E14" stroke-width="1.25"/>
+<rect x="302.79999999999995" y="520" width="12" height="12" rx="3" fill="#FCFBF7" stroke="#B9B3A4" stroke-width="1.25"/>
+<rect x="407.99999999999994" y="520" width="12" height="12" rx="3" fill="#E4ECF6" stroke="#3D6FA8" stroke-width="1.25"/>
+<rect x="501.99999999999994" y="520" width="12" height="12" rx="3" fill="#F8E1DD" stroke="#B5433A" stroke-width="1.25"/>
+<rect x="562.4" y="520" width="12" height="12" rx="3" fill="#ECE6F7" stroke="#6D4FB0" stroke-width="1.25"/>
+<text x="24" y="34" class="b s15">Outer loop: one pass per packet</text>
+<text x="936" y="34" class="e mu mono s11">batch.py</text>
+<text x="38" y="73" class="b s12">frozen manifest</text>
+<text x="38" y="89" class="mu">4 packets, hashed at the start</text>
+<text x="136" y="119" class="mu s11">packet i</text>
+<text x="38" y="154" class="mono b s13">PREPARE</text>
+<text x="38" y="173" class="mu">plan file DRAFT → READY →</text>
+<text x="38" y="188" class="mu">IN_PROGRESS, validated</text>
+<text x="274" y="154" class="mono b s13 cr">ROUTE</text>
+<text x="274" y="173" class="mu">predict one-pass odds, pick</text>
+<text x="274" y="188" class="mu">a pair or split · figure 4</text>
+<text x="424.0" y="153" class="c b s9 cr">PLANNED</text>
+<text x="510" y="154" class="mono b s13 ca">RUN</text>
+<text x="510" y="173" class="mu">runner.py: patch, checks,</text>
+<text x="510" y="188" class="mu">then review · figure 2</text>
+<text x="746" y="154" class="mono b s13">COMMIT</text>
+<text x="746" y="173" class="mu">plan marked COMPLETE,</text>
+<text x="746" y="188" class="mu">ACTIVE cleared</text>
+<text x="260" y="281" class="b cg">GitHub API, no model tokens</text>
+<text x="746" y="314" class="mono b s13">PUSH</text>
+<text x="746" y="333" class="mu">exact ref, never forced</text>
+<text x="510" y="314" class="mono b s13">PR</text>
+<text x="510" y="333" class="mu">create or reuse the PR</text>
+<text x="274" y="314" class="mono b s13">CI</text>
+<text x="274" y="333" class="mu">a second gate: the required</text>
+<text x="274" y="348" class="mu">check on the pushed head</text>
+<text x="38" y="314" class="mono b s13">MERGE</text>
+<text x="38" y="333" class="mu">API merge of the exact SHA</text>
+<text x="140" y="227" class="s12">next packet: index + 1, on a checkout refreshed</text>
+<text x="140" y="243" class="s12">from origin/main after the verified merge</text>
+<text x="38" y="428" class="mono b s13">COMPLETE</text>
+<text x="38" y="447" class="mu">last packet merged</text>
+<text x="430" y="392" class="mu s10">every transition</text>
+<text x="274" y="426" class="b s12">state.json checkpoint after every phase</text>
+<text x="274" y="446" class="mu">a restart reconciles local writes with the</text>
+<text x="274" y="461" class="mu">remote PR state: never a second writer,</text>
+<text x="274" y="476" class="mu">never a replay of an ambiguous call</text>
+<text x="709" y="392" class="cs s10">any failed gate or spent budget</text>
+<text x="628" y="426" class="b s12 cs">STOPPED, evidence preserved</text>
+<text x="628" y="446" class="cs">STOP file · 8 h deadline · 24 calls</text>
+<text x="628" y="461" class="cs">4M tokens · unknown usage · branch moved</text>
+<text x="628" y="476" class="cs">failed or stale CI · changes requested</text>
+<text x="628" y="491" class="cs">supervisor files changed</text>
+<text x="42" y="530" class="mu s11">model call: the only place tokens are spent</text>
+<text x="320.79999999999995" y="530" class="mu s11">plain Python</text>
+<text x="425.99999999999994" y="530" class="mu s11">GitHub API</text>
+<text x="520.0" y="530" class="mu s11">stop</text>
+<text x="580.4" y="530" class="mu s11">router: learned from outcomes, no model call of its own</text>
+</svg>
