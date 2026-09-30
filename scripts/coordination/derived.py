@@ -7,6 +7,7 @@ every model call reads an isolated source snapshot with no Git history, so neith
 tests nor the merged change can be read by the worker or the reviewer.
 
     python3 -m scripts.coordination.derived prepare PACKET --source CLONE --directory DIR
+    scripts/coordination/derived_env.sh REPO [CHECKOUT]     # prints the interpreter to validate with
     python3 -m scripts.coordination.derived validate --directory DIR --python /env/bin/python
     python3 -m scripts.coordination.derived run --directory DIR --worker-model M --worker-reasoning R \\
         --auth-home ~/.codex --live
