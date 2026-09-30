@@ -1141,6 +1141,21 @@ agent_strategy: SEQUENTIAL_WORKER
         self.assertEqual((cat, line["reason"]), ("no_patch", "Worker returned no patch"))
         self.assertNotIn("private_module", json.dumps(line))
 
+    def test_a_patch_outside_the_owned_files_is_a_scope_violation_not_a_harness_failure(self):
+        stray = "diff --git a/stray.txt b/stray.txt\nnew file mode 100644\n--- /dev/null\n+++ b/stray.txt\n@@ -0,0 +1 @@\n+stray\n"
+        adapter = Adapter()
+
+        def outside(runner, role, feedback):
+            result = adapter(runner, role, feedback)
+            if role == "worker":
+                result["patch"] += stray
+            return result
+        state = self.runner(outside).run()
+        self.assertEqual((state["phase"], state["stop_category"]), ("STOPPED", "scope_violation"))
+        (line,) = self.log_lines()
+        self.assertEqual(line["stop_category"], "scope_violation")
+        self.assertIn("stray.txt", line["reason"])
+
     def test_corrections_record_their_cause_call_and_time(self):
         self.packet["luna_triage"] = False
         worker_calls = []
