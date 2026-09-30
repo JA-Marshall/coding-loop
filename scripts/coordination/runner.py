@@ -243,6 +243,14 @@ def validate_packet(packet, ceilings=None):
     return packet
 
 
+def current_loop_version():
+    """The loop's checked-out commit, or None outside a Git checkout."""
+    try:
+        return git(Path(__file__).resolve().parent, "rev-parse", "HEAD").decode().strip()
+    except RunnerError:
+        return None
+
+
 def shown_packet(packet):
     """The packet as a model sees it: where the hidden check files are kept is the supervisor's business."""
     return {key: value for key, value in packet.items() if key != "hidden_overlay"}
@@ -776,7 +784,8 @@ class Runner:
                               "deadline": time.time() + self.packet["total_timeout"], "feedback": "",
                               "pair": configured_pair(self.packet), "attempt_id": uuid.uuid4().hex,
                               "decision": self.decision, "corrections_log": [], "logged": False,
-                              "timeline": [{"phase": "IMPLEMENT", "at": time.time()}]}
+                              "timeline": [{"phase": "IMPLEMENT", "at": time.time()}],
+                              "loop_version": current_loop_version()}
                 save_json(self.run_dir / "packet.json", self.packet)
                 self.checkpoint()
             try:
@@ -892,10 +901,8 @@ class Runner:
 
     def attempt_record(self):
         state = self.state
-        try:
-            loop_version = git(Path(__file__).resolve().parent, "rev-parse", "HEAD").decode().strip()
-        except RunnerError:
-            loop_version = None
+        # The commit the attempt started on: HEAD can move while it runs. Older states did not record it.
+        loop_version = state.get("loop_version") or current_loop_version()
         # Model-written text stays out: a worker's blocker summary can quote a private repository.
         reason = "Worker returned no patch" if state.get("stop_category") == "no_patch" else state.get("reason")
         checks = [{"id": c["id"], "exit_code": c["exit_code"]} for c in (state.get("checks") or {}).get("results", [])]

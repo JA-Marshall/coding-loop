@@ -390,6 +390,14 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(self.runner(route).run()["phase"], "LOCAL_REVIEWED")
         self.assertNotIn("acceptance", REVIEW_SCHEMA["required"])
 
+    def test_the_attempt_records_the_loop_commit_it_started_on(self):
+        from scripts.coordination import runner as runner_module
+        with patch.object(runner_module, "current_loop_version", side_effect=["started-on", "moved-to"]):
+            state = self.runner().run()
+        self.assertEqual(state["loop_version"], "started-on")
+        (line,) = [json.loads(text) for text in (self.home / "attempts.jsonl").read_text().splitlines()]
+        self.assertEqual(line["loop_version"], "started-on")
+
     def test_review_stale_hash_and_findings_stop(self):
         self.packet["max_corrections"] = 0
         state = self.runner(Adapter([finding()])).run()
