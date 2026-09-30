@@ -15,6 +15,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.coordination import native
+from scripts.coordination import runner as runner_module
 from scripts.coordination.runner import Runner, RunnerError, git
 
 
@@ -203,6 +204,19 @@ class NativeWorkerTests(unittest.TestCase):
         self.assertNotIn("hidden_overlay", spec["stdin"].decode())
         self.assertNotIn(str(self.hidden), spec["stdin"].decode())
 
+    def test_the_worker_sees_a_neutral_id_and_only_the_task_fields(self):
+        self.packet.update(id="pytest-pr14098")
+        model = FakeModel(write_new)
+        self.attempt(model)
+        prompt = model.specs[0]["stdin"].decode()
+        shown = json.loads(prompt.split("\nPACKET:\n", 1)[1].split("\n", 1)[0])
+        self.assertEqual(sorted(shown), ["acceptance", "checkout", "id", "objective", "owned_files"])
+        self.assertRegex(shown["id"], r"^task-[0-9a-f]{8}$")
+        for secret in ("pytest-pr14098", "14098", "pull-request", "pull request", "codex/", self.packet["checks"][0]["argv"][-1],
+                       "gpt-5.6-luna", "luna_triage", "base_sha"):
+            self.assertNotIn(secret, prompt)
+        self.assertIn("supervisor\nruns the project's tests", prompt)
+
     def test_the_python_environment_is_mounted_at_its_own_paths_with_its_links_and_nothing_beside_them(self):
         shims = self.home / "shims"
         mounts, bin_dir = native.python_mounts(self.python, [self.hidden], shims)
@@ -369,6 +383,30 @@ class NativeWorkerTests(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform.startswith("linux") and docker_ready(), "needs Docker and the local worker image")
+class ShownPacketTests(unittest.TestCase):
+    def test_the_shown_packet_holds_a_neutral_id_and_the_task_fields_only(self):
+        packet = {"id": "black-pr5117-t2", "branch": "codex/black-pr5117-t2", "plan": "derived-task",
+                  "objective": "o", "acceptance": ["a"], "owned_files": ["f.py"], "base_sha": "0" * 40,
+                  "checks": [{"id": "hidden-tests", "argv": ["python", "-m", "pytest", "tests/test_x.py"]}],
+                  "hidden_overlay": "/h", "worker_model": "m", "reviewer_model": "r", "max_calls": 12}
+        shown = runner_module.shown_packet(packet)
+        self.assertEqual(sorted(shown), ["acceptance", "id", "objective", "owned_files"])
+        self.assertEqual(shown["id"], runner_module.shown_packet(dict(packet))["id"])
+        self.assertNotIn("5117", shown["id"])
+
+    def test_a_neutral_id_is_shown_as_it_is(self):
+        self.assertEqual(runner_module.task_id("task-7f3a09c2"), "task-7f3a09c2")
+        self.assertNotEqual(runner_module.task_id("pytest-pr1"), runner_module.task_id("pytest-pr2"))
+
+    def test_check_failure_feedback_names_the_failed_check_but_not_its_log_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "pytest-pr14098-check.log"
+            log.write_text("FAILED x\n")
+            text = runner_module.check_failure_feedback([{"id": "hidden-tests", "exit_code": 1, "log": str(log)}])
+        self.assertIn('"id":"hidden-tests"', text)
+        self.assertNotIn(str(log), text)
+
+
 class ContainerTests(unittest.TestCase):
     """The real container, with a shell script for the CLI and no network at all."""
 

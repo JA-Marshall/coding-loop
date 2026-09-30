@@ -229,12 +229,12 @@ class IsolatedAdapter:
                     "No checks or writes here. Return your complete structured result.\nPACKET:\n"
                   + canonical(packet) + "\nEVIDENCE:\n" + feedback)
         record_prompt(runner, number, role, prompt, isolated=True)
-        if role == "worker" and is_claude(packet["worker_model"]):
+        if role == "worker" and is_claude(runner.packet["worker_model"]):
             # Claude's read boundary is its restricted tool set in the snapshot.
             return claude_worker(runner, number, prompt, source)
-        if role == "worker" and is_muse(packet["worker_model"]):
+        if role == "worker" and is_muse(runner.packet["worker_model"]):
             return muse_worker(runner, number, prompt, source, ROLE_SCHEMAS[role])
-        model, effort = codex_model(packet, role)
+        model, effort = codex_model(runner.packet, role)
         if role == "reviewer" and is_claude(model):
             return claude_call(runner, number, prompt, source, role=role, model=model,
                                effort=effort, schema=REVIEW_SCHEMA)
@@ -247,7 +247,7 @@ class IsolatedAdapter:
                 "-c", 'model_reasoning_effort="' + effort + '"',
                 "--output-schema", str(schema), "-o", str(output), "-"]
         try:
-            code = runner.command(argv, packet["call_timeout"], f"model-{number}", prompt.encode())
+            code = runner.command(argv, runner.packet["call_timeout"], f"model-{number}", prompt.encode())
         finally:
             if meta:
                 scrub_meta_provider(home)

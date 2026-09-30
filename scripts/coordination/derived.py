@@ -42,7 +42,7 @@ from .isolated import IsolatedAdapter
 from .native import NativeAdapter
 from .runner import LIMITS, REVIEW_MODEL, Runner, RunnerError, git, hidden_overlay, save_json, validate_packet
 
-PLAN = "derived-from-merged-pull-request"
+PLAN = "derived-task"
 # Failed hidden checks get their own rounds (max_check_corrections); review findings keep max_corrections.
 # Worst case: 1 + 5 worker calls on failed checks, then a review and 2 review rounds of worker and reviewer: 11.
 DEFAULT_LIMITS = {"max_calls": 12, "max_corrections": 2, "max_check_corrections": 5, "call_timeout": 1800,

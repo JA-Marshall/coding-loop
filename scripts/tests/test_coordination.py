@@ -650,7 +650,8 @@ packet = json.loads(prompt.split('PACKET:\n', 1)[1].split('\n', 1)[0])
 schema = json.loads(Path(args[args.index('--output-schema') + 1]).read_text())
 if 'patch' in schema['properties']:
     assert not CLAUDE_WORKER, 'a Claude worker must not use Codex'
-    assert args[args.index('--model') + 1] == packet['worker_model']
+    # The worker model is the loop's to choose; the model is not told which models are in play.
+    assert 'worker_model' not in packet and args[args.index('--model') + 1] == 'gpt-5.6-terra'
     result = {'patch': PATCH_VALUE, 'summary': 'fake Codex patch'}
 else:
     assert args[args.index('--model') + 1] == 'gpt-5.6-sol', 'Codex only advises'
@@ -907,7 +908,7 @@ packet = json.loads(prompt.split('PACKET:\n', 1)[1].split('\n', 1)[0])
 schema = json.loads(Path(args[args.index('--output-schema') + 1]).read_text())
 model = args[args.index('--model') + 1]
 if 'patch' in schema['properties']:
-    assert model == packet['worker_model'] and 'model_provider = "meta"' not in config, 'only the reviewer goes to Meta'
+    assert 'worker_model' not in packet and model == 'gpt-5.6-terra' and 'model_provider = "meta"' not in config, 'only the reviewer goes to Meta'
     result = {'patch': PATCH_VALUE, 'summary': 'fake worker patch'}
 else:
     assert model == 'REVIEW_MODEL', 'the provider prefix is not a model name: ' + model

@@ -202,7 +202,7 @@ class DerivedTests(unittest.TestCase):
     def test_models_are_not_told_where_the_hidden_files_are(self):
         packet = validate_packet(self.loop_packet(self.home / "anywhere"))
         self.assertNotIn(str(self.directory), json.dumps(shown_packet(packet)))
-        self.assertEqual(set(packet) - set(shown_packet(packet)), {"hidden_overlay"})
+        self.assertEqual(sorted(shown_packet(packet)), ["acceptance", "id", "objective", "owned_files"])
 
     def test_prepare_pins_the_checkout_and_keeps_the_merged_tests_outside_it(self):
         root = self.prepared()
