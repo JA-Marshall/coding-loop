@@ -1,6 +1,7 @@
 """Single-packet Linux/WSL supervisor. Run with python -m scripts.coordination.runner.
 
-Model tools are read-only. Only this process applies patches and runs the exact
+Model tools are read-only, except a native worker's, which edit a copy of the candidate inside a
+container (native.py). Only this process applies patches and runs the exact
 operator-supplied checks. Check commands are trusted code, not a security sandbox.
 """
 from __future__ import annotations
@@ -478,10 +479,15 @@ def repair_patch(root, patch):
     return ("stray header whitespace or envelope markers", repaired) if repaired.strip() != patch.strip() else None
 
 
-def apply_patch(root, patch, owned, repairs=None):
-    """Apply the worker's patch; if git rejects its format, try one mechanical repair before giving up."""
+def apply_patch(root, patch, owned, repairs=None, whitespace="error"):
+    """Apply the worker's patch; if git rejects its format, try one mechanical repair before giving up.
+
+    A diff git took from the worker's own copy is applied with whitespace="nowarn": whitespace is then
+    the model's edit, not a patch-format mistake."""
     if not isinstance(patch, str) or not patch.strip() or len(patch) > 2_000_000:
         raise RunnerError("Missing or oversized patch")
+    if whitespace != "error":
+        return apply_git_patch(root, patch, owned, whitespace)
     try:
         return apply_git_patch(root, patch, owned)
     except PatchFormatError as original:
@@ -497,7 +503,7 @@ def apply_patch(root, patch, owned, repairs=None):
         return names
 
 
-def apply_git_patch(root, patch, owned):
+def apply_git_patch(root, patch, owned, whitespace="error"):
     data = patch.encode()
     if any(line.startswith(prefix) for line in patch.splitlines()
            for prefix in ("old mode ", "new mode ", "new file mode 120", "new file mode 160",
@@ -527,12 +533,12 @@ def apply_git_patch(root, patch, owned):
     if not names:
         raise RunnerError("Patch has no changed files")
     try:
-        git(root, "apply", "--recount", "--check", "--whitespace=error", data=data)
+        git(root, "apply", "--recount", "--check", "--whitespace=" + whitespace, data=data)
     except RunnerError as exc:
         raise PatchFormatError(patch_feedback(
             "Patch context or whitespace failed validation; reread the current target and return a corrected diff",
             patch, exc)) from exc
-    git(root, "apply", "--recount", "--whitespace=error", data=data)
+    git(root, "apply", "--recount", "--whitespace=" + whitespace, data=data)
     return sorted(set(names))
 
 
@@ -608,16 +614,19 @@ class Runner:
         if git(self.root, "branch", "--show-current").decode().strip() != self.packet["branch"]:
             raise RunnerError("Branch changed during run")
 
-    def command(self, argv, timeout, label, stdin=None, cwd=None):
-        """Own process lifetime; descendants inherit lock and are killed on timeout."""
+    def command(self, argv, timeout, label, stdin=None, cwd=None, container=None):
+        """Own process lifetime; descendants inherit lock and are killed on timeout.
+
+        A command that runs a container names it, so an interrupted run shows what to kill."""
         timeout = min(timeout, self.remaining())
         log = self.run_dir / (label + ".log")
+        extra = {"container": container} if container else {}
         with log.open("wb") as stream:
-            self.checkpoint(inflight={"label": label, "pid": None})
+            self.checkpoint(inflight=dict({"label": label, "pid": None}, **extra))
             proc = subprocess.Popen(argv, cwd=cwd or self.root, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                     stdout=stream, stderr=subprocess.STDOUT, start_new_session=True,
                                     pass_fds=(self.lock_fd,), env=self.environment())
-            self.checkpoint(inflight={"label": label, "pid": proc.pid})
+            self.checkpoint(inflight=dict({"label": label, "pid": proc.pid}, **extra))
             try:
                 proc.communicate(stdin, timeout=timeout)
             except BaseException:
@@ -712,6 +721,8 @@ class Runner:
                     phase = self.state["phase"]
                     if phase == "IMPLEMENT":
                         result = self.model("worker", self.state["feedback"])
+                        # A native worker edited a copy with its own tools; the adapter took the diff itself.
+                        native = result.pop("native", False) is True
                         if set(result) != {"patch", "summary"} or not isinstance(result["summary"], str):
                             raise RunnerError("Invalid worker result contract")
                         if isinstance(result["patch"], str) and not result["patch"].strip():
@@ -719,6 +730,15 @@ class Runner:
                             raise RunnerError("Worker returned no patch: " + " ".join(result["summary"].split())[:500], category="no_patch")
                         self.checkpoint(phase="APPLYING")
                         repairs = []
+                        if native:
+                            try:
+                                # Git wrote this diff from an exact copy of the candidate: the path, symlink and
+                                # mode guards still apply, but a failure is the loop's, never a format round.
+                                apply_patch(self.root, result["patch"], self.packet["owned_files"], whitespace="nowarn")
+                            except PatchFormatError:
+                                raise RunnerError("The worker's own diff did not apply to the candidate") from None
+                            self.checkpoint(phase="CHECKS", candidate=fingerprint(self.root))
+                            continue
                         try:
                             apply_patch(self.root, result["patch"], self.packet["owned_files"], repairs)
                             if repairs:
@@ -809,7 +829,7 @@ class Runner:
                 "stop_category": state.get("stop_category"), "reason": reason, "timeline": state.get("timeline", []),
                 "usage": state.get("usage", []), "checks": checks,
                 "blocking_findings": len(blocking_findings(state.get("review") or {})), "loop_version": loop_version,
-                "patch_repairs": state.get("patch_repairs", [])}
+                "patch_repairs": state.get("patch_repairs", []), "native_calls": state.get("native_calls", [])}
 
     def log_attempt(self):
         """Append the attempt's one line. A crash between the append and the checkpoint below repeats

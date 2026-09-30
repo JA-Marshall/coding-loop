@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 from .runner import (REVIEW_SCHEMA, ROLE_SCHEMAS, ROLE_TEMPLATES, RunnerError, canonical,
                      claude_call, claude_worker, codex_model, git, is_claude, is_muse, record_prompt, save_json,
@@ -31,6 +32,8 @@ def snapshot(root, destination):
             target = destination / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(source.read_bytes())
+            # Keep executable bits: a native worker runs commands in the copy.
+            os.chmod(target, stat.S_IMODE(source.stat().st_mode) | 0o600)
     git(destination, "init", "-q")
 
 

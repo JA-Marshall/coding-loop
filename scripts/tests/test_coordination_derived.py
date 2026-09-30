@@ -217,12 +217,17 @@ class DerivedTests(unittest.TestCase):
                 "--auth-home", str(self.home)]
         code, text = self.call(*argv)
         self.assertEqual((code, "--live is required" in text), (2, True))
-        adapter = Worker()
-        with patch.object(derived, "IsolatedAdapter", lambda auth_home: adapter):
+        adapter, made = Worker(), []
+        def native(auth_home, python):
+            made.append(python)
+            return adapter
+        with patch.object(derived, "NativeAdapter", native):
             code, text = self.call(*argv, "--live")
             self.assertEqual(code, 0, text)
             again, refused = self.call(*argv, "--live")
         self.assertEqual((again, "attempt exists" in refused), (2, True))
+        # The worker edits a copy in a container, with the validated interpreter for the visible tests.
+        self.assertEqual(made, [sys.executable])
         attempt = self.directory / "attempts" / "gpt-5-6-terra-medium--claude-opus-5-5-high"
         packet = json.loads((attempt / "packet.json").read_text())
         self.assertEqual((packet["advisory_review"], packet["luna_triage"], packet["plan"]), (False, False, derived.PLAN))
@@ -236,12 +241,23 @@ class DerivedTests(unittest.TestCase):
         self.assertEqual((attempt / "checkout" / "product.py").read_text(), FIXED)
         self.assertEqual((self.directory / "checkout" / "product.py").read_text(), PRODUCT)
 
+    def test_the_read_only_worker_remains_available_by_flag(self):
+        self.prepared()
+        self.assertEqual(self.call("validate", "--directory", str(self.directory), "--python", sys.executable)[0], 0)
+        adapter = Worker()
+        with patch.object(derived, "IsolatedAdapter", lambda auth_home: adapter), \
+                patch.object(derived, "NativeAdapter", side_effect=AssertionError("native adapter used")):
+            code, text = self.call("run", "--directory", str(self.directory), "--worker-model", "gpt-5.6-terra",
+                                   "--worker-reasoning", "medium", "--auth-home", str(self.home), "--live",
+                                   "--read-only-worker")
+        self.assertEqual((code, adapter.roles), (0, ["worker", "reviewer"]), text)
+
     def test_two_reviewers_on_one_packet_get_their_own_attempts_and_the_launcher_raises_a_limit(self):
         self.prepared()
         self.assertEqual(self.call("validate", "--directory", str(self.directory), "--python", sys.executable)[0], 0)
         argv = ["run", "--directory", str(self.directory), "--worker-model", "gpt-5.6-terra", "--worker-reasoning", "medium",
                 "--auth-home", str(self.home), "--live"]
-        with patch.object(derived, "IsolatedAdapter", lambda auth_home: Worker()):
+        with patch.object(derived, "NativeAdapter", lambda auth_home, python: Worker()):
             self.assertEqual(self.call(*argv)[0], 0)
             code, text = self.call(*argv, "--reviewer-model", "meta/muse-spark-1.3-contributor", "--reviewer-reasoning", "medium",
                                    "--total-timeout", "30000", "--max-corrections", "1")
@@ -297,7 +313,7 @@ class DerivedTests(unittest.TestCase):
                          ["product.py", "tests"])
         self.assertEqual(self.call("validate", "--directory", str(self.directory), "--python", sys.executable)[0], 0)
         adapter = Worker()
-        with patch.object(derived, "IsolatedAdapter", lambda auth_home: adapter):
+        with patch.object(derived, "NativeAdapter", lambda auth_home, python: adapter):
             code, text = self.call("run", "--directory", str(self.directory), "--worker-model", "gpt-5.6-terra",
                                    "--worker-reasoning", "medium", "--auth-home", str(self.home), "--live")
         self.assertEqual(code, 0, text)

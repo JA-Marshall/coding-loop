@@ -20,7 +20,10 @@ validate proves the packet can be judged, with no model call: the checks must fa
          already hold the target repository's test dependencies.
 run      makes one attempt in a fresh checkout under DIR/attempts/NAME: a worker, the
          primary reviewer, and no advisory review. It refuses without --live, because it
-         makes real model calls, and without a passing validation.
+         makes real model calls, and without a passing validation. The worker edits a copy
+         with its own tools in a Docker container (native.py), with the validated interpreter
+         mounted read-only for the visible tests; --read-only-worker restores the older call
+         that returns a diff inside a JSON answer.
 
 This path has no plan authority: it is for public repositories that have no plan
 lifecycle, and it refuses a clone that has one.
@@ -36,6 +39,7 @@ import subprocess
 import sys
 
 from .isolated import IsolatedAdapter
+from .native import NativeAdapter
 from .runner import REVIEW_MODEL, Runner, RunnerError, git, hidden_overlay, save_json, validate_packet
 
 PLAN = "derived-from-merged-pull-request"
@@ -213,7 +217,9 @@ def run(args):
                                          ("reviewer_reasoning", args.reviewer_reasoning)) if value}), ceilings)
     save_json(attempt / "packet.json", loop_packet)
     decision = json.loads(args.decision_file.read_text()) if args.decision_file else None
-    result = Runner(loop_packet, attempt / "run", IsolatedAdapter(args.auth_home), decision=decision,
+    adapter = (IsolatedAdapter(args.auth_home) if args.read_only_worker
+               else NativeAdapter(args.auth_home, validation["python"]))
+    result = Runner(loop_packet, attempt / "run", adapter, decision=decision,
                     attempt_log=args.attempt_log, ceilings=ceilings).run()
     print(json.dumps({"phase": result["phase"], "calls": result["calls"], "corrections": result["corrections"],
                       "reason": result.get("reason"), "report": str(attempt / "run" / "report.md")}, indent=2))
@@ -245,6 +251,8 @@ def main(argv=None):
                              help=f"limit (default {DEFAULT_LIMITS[key]}); a value above the loop's ceiling raises it for this launch only")
     command.add_argument("--name", help="attempt name (default: worker model and effort, then reviewer model and effort)")
     command.add_argument("--live", action="store_true", help="explicitly authorize real model calls")
+    command.add_argument("--read-only-worker", action="store_true",
+                         help="run the worker read-only, returning a diff in its answer, instead of editing a copy in a container")
     command.add_argument("--attempt-log", type=Path, help="JSON-lines file the finished attempt is appended to (default: attempts.jsonl beside the run directory)")
     command.add_argument("--decision-file", type=Path, help="JSON object recording the routing decision; stored untouched, never acted on")
     command.set_defaults(handler=run)
