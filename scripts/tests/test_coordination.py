@@ -612,6 +612,18 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("source", excerpt)
         self.assertNotIn("tree noise", excerpt)
 
+    def test_a_long_test_name_with_one_underscore_each_side_still_starts_its_own_section(self):
+        from scripts.coordination.runner import failure_excerpt
+        body = ["________________ test_short ________________", "E       AssertionError: first broke",
+                "_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _",
+                "E       ValueError: still the first",
+                "_ TestX.test_a_name_long_enough_that_pytest_pads_it_with_one_underscore_only _",
+                "E       AssertionError: second broke"]
+        excerpt = failure_excerpt(self.pytest_log(body, ["2 failed in 0.1s"]), 4000)
+        self.assertIn("_ TestX.test_a_name_long_enough_that_pytest_pads_it_with_one_underscore_only _\nE       AssertionError: second broke", excerpt)
+        self.assertIn("E       ValueError: still the first", excerpt)
+        self.assertNotIn("_ _ _ _", excerpt)
+
     def test_a_pytest_collection_error_without_error_lines_keeps_the_last_five_lines(self):
         from scripts.coordination.runner import failure_excerpt
         body = ["_________________ ERROR collecting tests/test_y.py _________________"]

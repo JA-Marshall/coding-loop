@@ -369,7 +369,8 @@ def failure_excerpt(log_path, limit):
 
 
 PYTEST_BANNER = re.compile(r"^=+ (FAILURES|ERRORS) =+$")
-PYTEST_TEST = re.compile(r"^_{3,} .+ _{3,}$")
+# A long test name leaves only one underscore each side; "_ _ _ _" lines inside a traceback are not headers.
+PYTEST_TEST = re.compile(r"^_+ .+ _+$")
 PYTEST_SUMMARY = re.compile(r"^=+ short test summary info =+$")
 PYTEST_CAPTURED = re.compile(r"^-+ Captured .+ -+$")
 # A test of pytest itself can print a whole inner session (with its own banners) as captured output.
@@ -400,7 +401,7 @@ def pytest_failures(lines, limit):
         elif PYTEST_SUMMARY.match(line):
             end = i
             break
-        elif PYTEST_TEST.match(line) or PYTEST_BANNER.match(line):
+        elif (PYTEST_TEST.match(line) and line.strip("_ ")) or PYTEST_BANNER.match(line):
             current = [line]
             tests.append(current)
             continue
