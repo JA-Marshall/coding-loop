@@ -372,51 +372,55 @@ PYTEST_BANNER = re.compile(r"^=+ (FAILURES|ERRORS) =+$")
 PYTEST_TEST = re.compile(r"^_{3,} .+ _{3,}$")
 PYTEST_SUMMARY = re.compile(r"^=+ short test summary info =+$")
 PYTEST_CAPTURED = re.compile(r"^-+ Captured .+ -+$")
+# A test of pytest itself can print a whole inner session (with its own banners) as captured output.
+PYTEST_SESSION = re.compile(r"^=+ test session starts =+$")
+PYTEST_FOOTER = re.compile(r"^=+ .* in \d+(\.\d+)?s( \(.*\))? =+$")
+PYTEST_NO_ERROR_LINES_TAIL = 5
 
 
 def pytest_failures(lines, limit):
     """A pytest log's failure sections, shared out across the failing tests, or None if it has none.
 
-    Each test keeps the end of its traceback (the E lines and where it failed) and, from any captured
-    output, the start of the last unified diff there (the first mismatches of an expected/actual
-    comparison), or else the output's end. The short summary, naming every failing test, comes first.
+    The worker must not be handed the test's source, docstring, comments or captured output, as those
+    often explain the fix. So each failing test keeps only its name (the ``____ test ____`` header) and
+    its ``E`` lines, the assertion or exception message. If a failure has none (a collection or import
+    error, say) it keeps the last few lines of its traceback instead. The short summary, naming every
+    failing test, comes first.
     """
     start = next((i for i, line in enumerate(lines) if PYTEST_BANNER.match(line)), None)
     if start is None:
         return None
-    end = next((i for i in range(start, len(lines)) if PYTEST_SUMMARY.match(lines[i])), len(lines))
-    summary = "\n".join(lines[end:])[:limit // 4]
-    tests, current = [], None
-    for line in lines[start + 1:end]:
-        if PYTEST_TEST.match(line) or PYTEST_BANNER.match(line):
+    tests, current, inner, end = [], None, False, len(lines)
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if PYTEST_SESSION.match(line):
+            inner = True
+        elif inner:
+            inner = not PYTEST_FOOTER.match(line)
+        elif PYTEST_SUMMARY.match(line):
+            end = i
+            break
+        elif PYTEST_TEST.match(line) or PYTEST_BANNER.match(line):
             current = [line]
             tests.append(current)
-        elif current is not None:
+            continue
+        if current is not None:
             current.append(line)
+    summary = "\n".join(lines[end:])[:limit // 4]
     if not tests:
         return None
     share = max((limit - len(summary)) // len(tests) - 2, 200)
     parts = [summary] if summary else []
     for test in tests:
-        cut = next((i for i, line in enumerate(test) if PYTEST_CAPTURED.match(line)), len(test))
-        trace, captured = test[:cut], test[cut:]
-        trace_text = "\n".join(trace)
-        room = share if not captured else share // 2
-        if len(trace_text) > room:
-            trace_text = test[0] + "\n...[truncated]...\n" + trace_text[-(room - len(test[0]) - 20):]
-        part = trace_text
-        if captured:
-            diff = [i for i in range(len(captured) - 1)
-                    if captured[i].startswith("--- ") and captured[i + 1].startswith("+++ ")]
-            room = max(share - len(trace_text) - len(captured[0]) - 2 - len("\n...[truncated]..."), 0)
-            if diff:
-                text = "\n".join(captured[diff[-1]:])
-                text = text[:room] + ("\n...[truncated]..." if len(text) > room else "")
-            else:
-                text = "\n".join(captured)
-                text = ("...[truncated]...\n" + text[len(text) - room:]) if len(text) > room else text
-            part += "\n" + captured[0] + "\n" + text
-        parts.append(part)
+        # Captured output comes after the traceback and is never shown.
+        trace = test[1:next((i for i, line in enumerate(test) if PYTEST_CAPTURED.match(line)), len(test))]
+        shown = [line.rstrip() for line in trace if line.startswith("E ") and line[1:].strip()]
+        if not shown:
+            shown = [line.rstrip() for line in trace if line.strip()][-PYTEST_NO_ERROR_LINES_TAIL:]
+        text = "\n".join([test[0]] + shown)
+        if len(text) > share:
+            text = text[:share - 20] + "\n...[truncated]..."
+        parts.append(text)
     return "\n\n".join(parts)[:limit]
 
 

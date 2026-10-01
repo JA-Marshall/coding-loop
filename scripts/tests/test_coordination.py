@@ -558,29 +558,101 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("line 499", excerpt)
         self.assertEqual(failure_excerpt(self.home / "missing.log", 1000), "(check log unavailable)")
 
-    def test_a_pytest_log_gives_every_failing_test_its_traceback_end_and_the_start_of_its_diff(self):
+    def pytest_log(self, body, summary):
+        log = self.home / "pytest.log"
+        log.write_text("\n".join(["F.F", "=================================== FAILURES ==================================="]
+                                 + body + ["=========================== short test summary info ============================"]
+                                 + summary))
+        return log
+
+    def test_a_pytest_failure_shows_the_test_name_and_its_error_lines_only(self):
+        from scripts.coordination.runner import failure_excerpt
+        body = ["________________ TestA.test_one ________________", "",
+                "    def test_one(self):",
+                '        """timedelta(0) != 0, so the divide-by-zero guard does not catch it."""',
+                "        # the fix is to compare against the zero of the same type",
+                "        value = compute()",
+                ">       assert value == 0",
+                "E       AssertionError: assert 1 == 0",
+                "E         ",
+                "E         Use -v to get more diff",
+                "",
+                "tests/test_x.py:9: AssertionError",
+                "----------------------------- Captured stdout call -----------------------------",
+                "E captured text that merely starts with E", "--- expected", "+++ actual"]
+        log = self.pytest_log(body, ["FAILED tests/test_x.py::TestA::test_one - AssertionError: assert 1 == 0", "1 failed in 0.1s"])
+        excerpt = failure_excerpt(log, 4000)
+        self.assertIn("TestA.test_one", excerpt)
+        self.assertIn("E       AssertionError: assert 1 == 0", excerpt)
+        self.assertIn("E         Use -v to get more diff", excerpt)
+        self.assertIn("FAILED tests/test_x.py::TestA::test_one", excerpt)
+        for leaked in ("divide-by-zero", "same type", "compute()", "def test_one", "assert value == 0", "Captured",
+                       "merely starts", "--- expected", "tests/test_x.py:9"):
+            self.assertNotIn(leaked, excerpt)
+
+    def test_every_failing_test_of_a_pytest_log_keeps_its_name_and_error_within_the_limit(self):
         from scripts.coordination.runner import failure_excerpt
         def failure(name, noise):
             return ([f"________________ {name} ________________", "    def test(): ..."] + ["    source"] * noise
-                    + [f"E       AssertionError: {name} broke", f"tests/test_x.py:9: AssertionError",
-                       "----------------------------- Captured stderr call -----------------------------",
-                       "--- expected tree", "+++ actual tree"] + ["  tree noise"] * noise
-                    + ["--- expected", "+++ actual", f"@@ first mismatch in {name} @@"] + [" diff line"] * noise)
-        lines = (["F.F", "=================================== FAILURES ==================================="]
-                 + failure("test_one", 400) + failure("test_two", 400)
-                 + ["=========================== short test summary info ============================",
-                    "FAILED tests/test_x.py::test_one - AssertionError", "FAILED tests/test_x.py::test_two - AssertionError",
-                    "2 failed in 0.1s"])
-        log = self.home / "pytest.log"
-        log.write_text("\n".join(lines))
+                    + [f"E       AssertionError: {name} broke", "E       " + "long " * 400,
+                       "tests/test_x.py:9: AssertionError",
+                       "----------------------------- Captured stderr call -----------------------------"]
+                    + ["  tree noise"] * noise)
+        body = failure("test_one", 400) + failure("test_two", 400) + failure("test_three", 400)
+        log = self.pytest_log(body, [f"FAILED tests/test_x.py::{n} - AssertionError" for n in ("test_one", "test_two", "test_three")]
+                              + ["3 failed in 0.1s"])
         excerpt = failure_excerpt(log, 4000)
         self.assertLessEqual(len(excerpt), 4000)
-        self.assertTrue(excerpt.startswith("=== short test summary info") or "short test summary" in excerpt.splitlines()[0])
-        for name in ("test_one", "test_two"):
+        self.assertIn("short test summary", excerpt.splitlines()[0])
+        for name in ("test_one", "test_two", "test_three"):
             self.assertIn(f"FAILED tests/test_x.py::{name}", excerpt)
             self.assertIn(f"E       AssertionError: {name} broke", excerpt)
-            self.assertIn(f"@@ first mismatch in {name} @@", excerpt)
+            self.assertIn(f"____ {name} ____", excerpt)
+        self.assertIn("[truncated]", excerpt)
+        self.assertNotIn("source", excerpt)
         self.assertNotIn("tree noise", excerpt)
+
+    def test_a_pytest_collection_error_without_error_lines_keeps_the_last_five_lines(self):
+        from scripts.coordination.runner import failure_excerpt
+        body = ["_________________ ERROR collecting tests/test_y.py _________________"]
+        body += [f"traceback line {n}" for n in range(1, 11)]
+        log = self.pytest_log(body, ["ERROR tests/test_y.py", "1 error in 0.1s"])
+        excerpt = failure_excerpt(log, 4000)
+        self.assertIn("ERROR collecting tests/test_y.py", excerpt)
+        self.assertIn("ERROR tests/test_y.py", excerpt)
+        for n in range(6, 11):
+            self.assertIn(f"traceback line {n}\n" if n < 10 else "traceback line 10", excerpt)
+        self.assertNotIn("traceback line 5\n", excerpt)
+        self.assertNotIn("traceback line 1\n", excerpt)
+        # An import error that does have E lines shows those instead.
+        body += ["E   ModuleNotFoundError: No module named 'zzz'"]
+        excerpt = failure_excerpt(self.pytest_log(body, ["ERROR tests/test_y.py", "1 error in 0.1s"]), 4000)
+        self.assertIn("E   ModuleNotFoundError: No module named 'zzz'", excerpt)
+        self.assertNotIn("traceback line 10", excerpt)
+
+    def test_an_inner_pytest_session_in_captured_output_is_not_taken_for_the_real_failures(self):
+        from scripts.coordination.runner import failure_excerpt
+        body = ["________________ test_outer ________________", "    def test_outer(pytester): ...",
+                "E       Failed: nomatch: 'expected line'",
+                "----------------------------- Captured stdout call -----------------------------",
+                "============================= test session starts ==============================",
+                "=================================== FAILURES ===================================",
+                "_____________________________________ test _____________________________________",
+                "    def inner(): secret_inner_source()",
+                "E   SyntaxError: inner",
+                "=========================== short test summary info ============================",
+                "FAILED test_inner.py::test - inner summary",
+                "============================== 1 failed in 0.01s ===============================",
+                "________________ test_second ________________",
+                "E       AssertionError: second broke"]
+        excerpt = failure_excerpt(self.pytest_log(body, ["FAILED tests/t.py::test_outer", "FAILED tests/t.py::test_second",
+                                                         "2 failed in 0.5s"]), 4000)
+        self.assertIn("E       Failed: nomatch: 'expected line'", excerpt)
+        self.assertIn("E       AssertionError: second broke", excerpt)
+        self.assertIn("____ test_second ____", excerpt)
+        self.assertEqual(excerpt.count("short test summary"), 1)
+        for leaked in ("secret_inner_source", "inner summary", "SyntaxError: inner", "test session starts"):
+            self.assertNotIn(leaked, excerpt)
 
     def test_empty_worker_patch_stops_with_its_blocker_summary(self):
         def blocked(runner, role, feedback):

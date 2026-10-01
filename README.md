@@ -27,7 +27,7 @@ Anything in red stops the queue in place with the evidence preserved: a `STOP` f
 The worker model is asked for a unified diff and a summary, nothing else. The supervisor applies the patch to the packet's owned files only, runs the prescribed check commands, then sends the full diff to a reviewer model. Three things send work back to a fresh `IMPLEMENT` call, each with a bounded slice of evidence:
 
 - a patch that does not apply, with the parser error;
-- a failed check, with at most 8,000 characters of the failure blocks from its log;
+- a failed check, with at most 8,000 characters from its log: for a pytest failure only each failing test's name and its `E` lines (never the test's source, docstring, comments or captured output);
 - a blocking review finding, with the findings themselves.
 
 A corrected candidate is reviewed against the findings it was meant to fix, so the reviewer converges instead of raising new nits each round. Non-blocking findings travel into the PR body as reviewer notes and never cost a correction. High-risk packets get a second, independent advisory review from a different model family whose blocking finding stops the run for the owner rather than triggering a fix.
