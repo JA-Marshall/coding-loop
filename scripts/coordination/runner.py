@@ -716,7 +716,7 @@ class Runner:
             proc = subprocess.Popen(argv, cwd=cwd or self.root, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                     stdout=stream, stderr=subprocess.STDOUT, start_new_session=True,
                                     pass_fds=(self.lock_fd,),
-                                    env=self.environment(self.root.parent / "black-cache" / re.sub(r"[^A-Za-z0-9._-]", "-", label)))
+                                    env=self.environment(self.run_dir / "black-cache" / re.sub(r"[^A-Za-z0-9._-]", "-", label)))
             self.checkpoint(inflight=dict({"label": label, "pid": proc.pid}, **extra))
             try:
                 proc.communicate(stdin, timeout=timeout)
