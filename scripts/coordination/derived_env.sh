@@ -43,8 +43,10 @@ case $repo in
         name=black
         specs="pytest click mypy_extensions packaging pathspec platformdirs aiohttp tomli hypothesis pytokens ipython tokenize-rt" ;;
     pytest)
+        # pytest's own dependencies, but not pytest: a released pytest in site-packages holds the merged code
+        # of most packets, and the worker can read it. The checkout's src/ is on the path through bin/pysrc.
         name=pytest
-        specs="pytest pluggy iniconfig packaging pygments hypothesis xmlschema attrs mock argcomplete pexpect setuptools" ;;
+        specs="exceptiongroup tomli pluggy iniconfig packaging pygments hypothesis xmlschema attrs mock argcomplete pexpect setuptools" ;;
     pydantic)
         if [ -z "$checkout" ] || [ ! -f "$checkout/pyproject.toml" ]; then
             echo "pydantic needs CHECKOUT, a directory with a pyproject.toml, to read the pydantic-core pin" >&2
@@ -96,6 +98,8 @@ fi
 # No --upgrade: what an environment already holds stays as it is.
 # shellcheck disable=SC2086
 "$dir/bin/pip" install -q $specs >&2
+# An environment built before this rule may hold the released project; hypothesis and the like do not need it.
+if [ "$repo" = pytest ]; then "$dir/bin/pip" uninstall -y -q pytest >&2 || true; fi
 
 wrapper=$dir/bin/pysrc
 temporary=$wrapper.new.$$
