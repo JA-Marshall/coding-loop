@@ -715,7 +715,8 @@ class Runner:
             self.checkpoint(inflight=dict({"label": label, "pid": None}, **extra))
             proc = subprocess.Popen(argv, cwd=cwd or self.root, stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
                                     stdout=stream, stderr=subprocess.STDOUT, start_new_session=True,
-                                    pass_fds=(self.lock_fd,), env=self.environment())
+                                    pass_fds=(self.lock_fd,),
+                                    env=self.environment(self.root.parent / "black-cache" / re.sub(r"[^A-Za-z0-9._-]", "-", label)))
             self.checkpoint(inflight=dict({"label": label, "pid": proc.pid}, **extra))
             try:
                 proc.communicate(stdin, timeout=timeout)
@@ -737,11 +738,15 @@ class Runner:
         proc.wait()
 
     @staticmethod
-    def environment():
+    def environment(cache_dir=None):
         # No inherited production DB or cloud/eBay credentials in check commands.
         env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL", "CODEX_HOME") if key in os.environ}
         env.update(STOREHOUSE_DEPLOYMENT="test", EBAY_ENVIRONMENT="mocked",
                    PYTHONDONTWRITEBYTECODE="1", GIT_TERMINAL_PROMPT="0")
+        if cache_dir is not None:
+            # Black pickles its compiled grammar in ~/.cache/black/<version>/, checked only against Grammar.txt's
+            # mtime. Shared, a worker's grammar change would be hidden by (or leak into) another attempt's pickle.
+            env["BLACK_CACHE_DIR"] = str(cache_dir)
         return env
 
     def hidden_checks(self):

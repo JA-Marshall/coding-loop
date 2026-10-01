@@ -360,6 +360,39 @@ class DerivedTests(unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "Symlinks require manual handling"):
             fingerprint(attempt)
 
+    def test_a_dirty_working_tree_encoded_file_is_assumed_unchanged_and_recorded_but_other_dirt_is_not(self):
+        encoded = self.home / "encoded"
+        git(encoded.parent, "init", "-q", "-b", "main", str(encoded))
+        (encoded / ".gitattributes").write_text("*.inc working-tree-encoding=latin-1\n")
+        (encoded / "wrongenc.inc").write_bytes(b"caf\xe9\n")
+        (encoded / "product.py").write_text(PRODUCT)
+        git(encoded, "add", "-A")
+        git(encoded, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "base")
+        (encoded / "wrongenc.inc").write_bytes(b"changed\n")      # git 2.34 lists it as modified, as in the flake
+        self.assertEqual(git(encoded, "status", "--porcelain").decode().strip(), "M wrongenc.inc")
+        self.assertEqual(derived.assume_unchanged_encoded(encoded), ["wrongenc.inc"])
+        self.assertEqual(git(encoded, "status", "--porcelain"), b"")
+        record = json.loads((encoded.parent / "checkout-fixups.json").read_text())
+        self.assertEqual(record["assume_unchanged"], ["wrongenc.inc"])
+        (encoded.parent / "checkout-fixups.json").unlink()
+        (encoded / "product.py").write_text(FIXED)          # a real change beside it: nothing is hidden
+        (encoded / "wrongenc.inc").write_bytes(b"changed again\n")
+        self.assertEqual(derived.assume_unchanged_encoded(encoded), [])
+        self.assertFalse((encoded.parent / "checkout-fixups.json").exists())
+
+    def test_every_check_gets_its_own_black_cache_directory(self):
+        self.assertNotIn("BLACK_CACHE_DIR", Runner.environment())
+        self.assertEqual(Runner.environment(self.home / "c")["BLACK_CACHE_DIR"], str(self.home / "c"))
+        root = self.prepared()
+        self.assertEqual(self.call("validate", "--directory", str(self.directory), "--python", sys.executable)[0], 0)
+        packet = self.loop_packet(root)
+        seen = []
+        real = derived.subprocess.run
+        with patch.object(derived.subprocess, "run", lambda *a, **k: (seen.append(k.get("env", {}).get("BLACK_CACHE_DIR")),
+                                                                      real(*a, **k))[1]):
+            derived.run_checks(root, packet["checks"], self.directory / "hidden", ["product.py"], self.home / "log")
+        self.assertEqual(seen, [str(self.directory / "black-cache" / "hidden-tests")])
+
 
 if __name__ == "__main__":
     unittest.main()

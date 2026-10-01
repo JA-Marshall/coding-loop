@@ -91,7 +91,24 @@ def clone_at_base(source, destination, packet):
             *("!/" + re.sub(r"([*?\[\\])", r"\\\1", name) for name in links))
     if isinstance(packet.get("repo"), str) and packet["repo"]:
         git(destination, "remote", "set-url", "origin", packet["repo"])
+    assume_unchanged_encoded(destination)
     return links
+
+
+def assume_unchanged_encoded(checkout):
+    """Sphinx stores tests/roots/*/wrongenc.inc as latin-1 under a working-tree-encoding attribute that git 2.34
+    cannot convert, so whether `git status` lists it as modified depends on the checkout's timing, and a dirty
+    base stops the run. When those files are the only dirty paths they are marked assume-unchanged, and the
+    paths are recorded in checkout-fixups.json beside the checkout (in the attempt's folder). Returns the paths."""
+    dirty = [line[3:] for line in git(checkout, "status", "--porcelain").decode().splitlines()]
+    encoded = [path for path in dirty if git(checkout, "check-attr", "working-tree-encoding", "--", path)
+               .decode().strip().split(": ")[-1] not in ("unspecified", "unset")]
+    if not dirty or encoded != dirty:
+        return []
+    git(checkout, "update-index", "--assume-unchanged", "--", *encoded)
+    save_json(Path(checkout).parent / "checkout-fixups.json", {"assume_unchanged": encoded, "why":
+              "working-tree-encoding files git 2.34 cannot convert; dirty or not depending on checkout timing"})
+    return encoded
 
 
 def prepare(args):
@@ -150,7 +167,8 @@ def run_checks(root, checks, hidden, owned, log_prefix):
         with hidden_overlay(root, hidden, owned), log.open("wb") as stream:
             try:
                 code = subprocess.run(check["argv"], cwd=root, stdin=subprocess.DEVNULL, stdout=stream,
-                                      stderr=subprocess.STDOUT, timeout=check["timeout"], env=Runner.environment()).returncode
+                                      stderr=subprocess.STDOUT, timeout=check["timeout"],
+                                      env=Runner.environment(Path(root).parent / "black-cache" / check["id"])).returncode
             except subprocess.TimeoutExpired:
                 code = "timeout"
             except OSError:
